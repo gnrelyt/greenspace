@@ -162,6 +162,27 @@ def get_bounds_from_polygons(features):
     
     return (min(lons), min(lats), max(lons), max(lats))
 
+def is_boundary_feature(feature) -> bool:
+    """
+    Check if a feature is a boundary (user-drawn polygon).
+    Returns True for:
+    - Features with feature_type == "boundary"
+    - Features without feature_type property (backward compatibility)
+    Returns False for:
+    - Features with feature_type != "boundary"
+    - Features with type == "park" or "park_buffer" (legacy parks/buffers)
+    """
+    feature_type = feature.get('properties', {}).get('feature_type')
+    legacy_type = feature.get('properties', {}).get('type')
+    
+    # Skip if this is explicitly a non-boundary feature
+    if feature_type and feature_type != 'boundary':
+        return False
+    if legacy_type in ['park', 'park_buffer']:
+        return False
+    
+    return True
+
 def load_boundary_polygon(features):
     """Load and merge boundary polygons."""
     if not features:
@@ -169,6 +190,10 @@ def load_boundary_polygon(features):
     
     polygons = []
     for feature in features:
+        # Only process boundary-type features
+        if not is_boundary_feature(feature):
+            continue
+            
         if feature['geometry']['type'] == 'Polygon':
             coords = feature['geometry']['coordinates'][0]
             poly = Polygon([(c[0], c[1]) for c in coords])
@@ -991,7 +1016,9 @@ with st.sidebar:
                     st.warning(f"⚠️ {100-coverage:.1f}% uncovered")
             
             st.divider()
-            st.info(f"📍 Boundary polygons: {len(st.session_state.geojson_features)}")
+            # Count only boundary-type features (exclude any parks/buffers that might be in the list)
+            boundary_count = sum(1 for f in st.session_state.geojson_features if is_boundary_feature(f))
+            st.info(f"📍 Boundary polygons: {boundary_count}")
             
             if st.session_state.algorithm_steps:
                 st.divider()
@@ -1102,12 +1129,23 @@ if not st.session_state.optimization_run:
     if map_data and 'all_drawings' in map_data and map_data['all_drawings']:
         for drawing in map_data['all_drawings']:
             if drawing['geometry']['type'] == 'Polygon':
+                # Only process new drawings from the Draw plugin
+                # Skip if this drawing matches any existing geojson_feature by comparing coordinates
                 coords_str = json.dumps(drawing['geometry']['coordinates'])
                 
+                # Check if this exact geometry already exists in our stored features
                 is_duplicate = any(
                     json.dumps(f['geometry']['coordinates']) == coords_str
                     for f in st.session_state.geojson_features
                 )
+                
+                # Also skip if this drawing has properties matching our stored features
+                # (indicates it's a re-rendered feature, not a new user drawing)
+                if drawing.get('properties'):
+                    props = drawing['properties']
+                    if 'id' in props and 'created' in props:
+                        # This looks like a re-rendered feature, skip it
+                        is_duplicate = True
                 
                 if not is_duplicate:
                     feature = {
@@ -1115,6 +1153,7 @@ if not st.session_state.optimization_run:
                         "geometry": drawing['geometry'],
                         "properties": {
                             "id": len(st.session_state.geojson_features) + 1,
+                            "feature_type": "boundary",
                             "created": datetime.now().isoformat()
                         }
                     }
