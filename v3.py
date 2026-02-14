@@ -208,8 +208,12 @@ def create_park_at_location(centroid, target_area_m2, boundary_poly, lon_per_m, 
 # ============================================================================
 
 def build_live_map(boundary_poly, candidate_parks=None, selected_parks=None, 
-                   demand_points=None, service_distance_m=None, bounds=None):
-    """Build a folium map with current algorithm state (handles MultiPolygon)."""
+                   demand_points=None, service_distance_m=None, bounds=None,
+                   highlight_parks=None):
+    """
+    Build a folium map with current algorithm state (handles MultiPolygon).
+    highlight_parks: list of parks to highlight in a different color (e.g., newly merged/moved parks)
+    """
     m = folium.Map(
         location=[54.5973, -3.4360],
         zoom_start=6,
@@ -230,8 +234,8 @@ def build_live_map(boundary_poly, candidate_parks=None, selected_parks=None,
                 style_function=lambda x: {
                     'color': '#007bff',
                     'weight': 2,
-                    'opacity': 0.8,
-                    'fillOpacity': 0.2
+                    'opacity': 0.6,
+                    'fillOpacity': 0.1
                 }
             ).add_to(m)
         elif boundary_poly.geom_type == 'MultiPolygon':
@@ -247,12 +251,12 @@ def build_live_map(boundary_poly, candidate_parks=None, selected_parks=None,
                     style_function=lambda x: {
                         'color': '#007bff',
                         'weight': 2,
-                        'opacity': 0.8,
-                        'fillOpacity': 0.2
+                        'opacity': 0.6,
+                        'fillOpacity': 0.1
                     }
                 ).add_to(m)
     
-    # Draw candidate parks as light gray
+    # Draw candidate parks as BOLD ORANGE/RED grid
     if candidate_parks:
         for park in candidate_parks:
             if park.geom_type == 'Polygon':
@@ -265,30 +269,50 @@ def build_live_map(boundary_poly, candidate_parks=None, selected_parks=None,
                         }
                     },
                     style_function=lambda x: {
-                        'color': '#cccccc',
-                        'weight': 1,
-                        'opacity': 0.4,
-                        'fillOpacity': 0.1
+                        'color': '#ff6b35',  # Bold orange-red
+                        'weight': 2,
+                        'opacity': 0.7,
+                        'fillOpacity': 0.3
                     }
                 ).add_to(m)
     
-    # Draw demand points as tiny blue dots
+    # Draw demand points as LARGER bright blue dots
     if demand_points:
         for point in demand_points:
             folium.CircleMarker(
                 location=[point.y, point.x],
-                radius=2,
-                color='#3498db',
+                radius=3,
+                color='#0066ff',
                 fill=True,
-                fillColor='#3498db',
-                fillOpacity=0.6,
-                weight=0.5
+                fillColor='#0066ff',
+                fillOpacity=0.8,
+                weight=1
             ).add_to(m)
     
-    # Draw selected parks in green
+    # Draw selected parks in green (with highlight option)
     if selected_parks:
         for park in selected_parks:
             if park.geom_type == 'Polygon':
+                # Check if this park should be highlighted
+                is_highlighted = False
+                if highlight_parks:
+                    for hp in highlight_parks:
+                        if park.equals(hp):
+                            is_highlighted = True
+                            break
+                
+                # Use different color for highlighted parks
+                if is_highlighted:
+                    park_color = '#ffeb3b'  # Bright yellow for newly moved/merged
+                    park_opacity = 0.9
+                    park_fill_opacity = 0.7
+                    park_weight = 3
+                else:
+                    park_color = '#27ae60'  # Standard green
+                    park_opacity = 0.8
+                    park_fill_opacity = 0.5
+                    park_weight = 2
+                
                 folium.GeoJson(
                     data={
                         "type": "Feature",
@@ -297,11 +321,11 @@ def build_live_map(boundary_poly, candidate_parks=None, selected_parks=None,
                             "coordinates": [list(park.exterior.coords)]
                         }
                     },
-                    style_function=lambda x: {
-                        'color': '#27ae60',
-                        'weight': 2,
-                        'opacity': 0.9,
-                        'fillOpacity': 0.6
+                    style_function=lambda x, color=park_color, op=park_opacity, fill_op=park_fill_opacity, w=park_weight: {
+                        'color': color,
+                        'weight': w,
+                        'opacity': op,
+                        'fillOpacity': fill_op
                     }
                 ).add_to(m)
             
@@ -1079,12 +1103,12 @@ else:
             
             if step_data['type'] == 'candidates':
                 m = build_live_map(boundary, candidate_parks=step_data['parks'], bounds=bounds)
-                st.markdown("### 🔵 Candidate Park Locations (Gray)")
+                st.markdown("### 🔵 Candidate Park Locations (Orange Grid)")
                 st_folium(m, width=1400, height=600)
             elif step_data['type'] == 'demand_points':
                 m = build_live_map(boundary, candidate_parks=step_data['parks'], 
                                  demand_points=step_data.get('demand_points'), bounds=bounds)
-                st.markdown("### 🔵 Candidates + 🔷 Demand Points")
+                st.markdown("### 🔵 Candidates (Orange) + 🔷 Demand Points (Blue)")
                 st_folium(m, width=1400, height=600)
             elif step_data['type'] == 'optimal_solution':
                 m = build_live_map(boundary, selected_parks=step_data['parks'],
@@ -1092,11 +1116,35 @@ else:
                                  bounds=bounds)
                 st.markdown("### 🟢 ILP Optimal Solution")
                 st_folium(m, width=1400, height=600)
-            elif step_data['type'] in ['refinement', 'final', 'position_optimization', 'coverage_fine_tune']:
+            elif step_data['type'] == 'refinement':
+                # Highlight merged parks in yellow
+                m = build_live_map(boundary, selected_parks=step_data['parks'],
+                                 service_distance_m=calculate_service_distance(st.session_state.park_size_ha),
+                                 bounds=bounds,
+                                 highlight_parks=step_data['parks'])
+                st.markdown(f"### 🟢 Parks (Green) | 🟡 Merged/New Parks (Yellow) | {step_data['description']}")
+                st_folium(m, width=1400, height=600)
+            elif step_data['type'] == 'position_optimization':
+                # Highlight repositioned parks in yellow
+                m = build_live_map(boundary, selected_parks=step_data['parks'],
+                                 service_distance_m=calculate_service_distance(st.session_state.park_size_ha),
+                                 bounds=bounds,
+                                 highlight_parks=step_data['parks'])
+                st.markdown(f"### 🟢 Parks (Green) | 🟡 Repositioned Parks (Yellow) | {step_data['description']}")
+                st_folium(m, width=1400, height=600)
+            elif step_data['type'] == 'coverage_fine_tune':
+                # Highlight fine-tuned parks in yellow
+                m = build_live_map(boundary, selected_parks=step_data['parks'],
+                                 service_distance_m=calculate_service_distance(st.session_state.park_size_ha),
+                                 bounds=bounds,
+                                 highlight_parks=step_data['parks'])
+                st.markdown(f"### 🟢 Parks (Green) | 🟡 Fine-tuned Parks (Yellow) | {step_data['description']}")
+                st_folium(m, width=1400, height=600)
+            elif step_data['type'] == 'final':
                 m = build_live_map(boundary, selected_parks=step_data['parks'],
                                  service_distance_m=calculate_service_distance(st.session_state.park_size_ha),
                                  bounds=bounds)
-                st.markdown(f"### 🟢 {step_data['description']}")
+                st.markdown(f"### ✅ Final Result | {step_data['description']}")
                 st_folium(m, width=1400, height=600)
         else:
             # Fallback: show final result if no valid step
