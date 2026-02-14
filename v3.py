@@ -55,6 +55,44 @@ def calculate_service_distance(park_size_ha):
     service_distance_m = 100 * park_size_ha + 100
     return service_distance_m
 
+def create_buffer_projected(geometry, buffer_distance_m):
+    """
+    Create a buffer around a geometry using projected coordinates for accurate circular shape.
+    
+    Args:
+        geometry: Shapely geometry in EPSG:4326 (lat/lon)
+        buffer_distance_m: Buffer distance in meters
+    
+    Returns:
+        Buffered geometry in EPSG:4326 (lat/lon)
+    """
+    from shapely.ops import transform
+    import pyproj
+    from functools import partial
+    
+    # Create transformer to/from Web Mercator (EPSG:3857)
+    project_to_meters = partial(
+        pyproj.transform,
+        pyproj.Proj('EPSG:4326'),  # WGS84 (lat/lon)
+        pyproj.Proj('EPSG:3857')   # Web Mercator (meters)
+    )
+    project_to_latlon = partial(
+        pyproj.transform,
+        pyproj.Proj('EPSG:3857'),  # Web Mercator (meters)
+        pyproj.Proj('EPSG:4326')   # WGS84 (lat/lon)
+    )
+    
+    # Transform to meters
+    geom_meters = transform(project_to_meters, geometry)
+    
+    # Create buffer in meters
+    buffer_meters = geom_meters.buffer(buffer_distance_m)
+    
+    # Transform back to lat/lon
+    buffer_latlon = transform(project_to_latlon, buffer_meters)
+    
+    return buffer_latlon
+
 def calculate_area_hectares(coords):
     """
     Calculate area in hectares from lat/lon coordinates.
@@ -130,33 +168,59 @@ def meters_to_degrees(meters, ref_lat=54.5973):
 def create_park_at_location(centroid, target_area_m2, boundary_poly, lon_per_m, lat_per_m):
     """
     Create a park at a given location.
+    Works in projected coordinates (meters) to avoid distortion, then converts back to lat/lon.
     Park must be FULLY within boundary - no clipping allowed.
     """
+    from shapely.ops import transform
+    import pyproj
+    from functools import partial
+    
+    # Create transformer to/from Web Mercator (EPSG:3857) for accurate meter-based geometry
+    project_to_meters = partial(
+        pyproj.transform,
+        pyproj.Proj('EPSG:4326'),  # WGS84 (lat/lon)
+        pyproj.Proj('EPSG:3857')   # Web Mercator (meters)
+    )
+    project_to_latlon = partial(
+        pyproj.transform,
+        pyproj.Proj('EPSG:3857'),  # Web Mercator (meters)
+        pyproj.Proj('EPSG:4326')   # WGS84 (lat/lon)
+    )
+    
+    # Transform centroid to meters
+    centroid_point = Point(centroid[0], centroid[1])
+    centroid_meters = transform(project_to_meters, centroid_point)
+    
+    # Calculate park dimensions in meters (aspect ratio 1.5)
     aspect_ratio = 1.5
     park_height_m = np.sqrt(target_area_m2 / aspect_ratio)
     park_width_m = target_area_m2 / park_height_m
     
-    park_width_deg = park_width_m / lon_per_m
-    park_height_deg = park_height_m / lat_per_m
+    # Create park rectangle in meters
+    x_center = centroid_meters.x
+    y_center = centroid_meters.y
     
-    x1 = centroid[0] - park_width_deg / 2
-    y1 = centroid[1] - park_height_deg / 2
-    x2 = centroid[0] + park_width_deg / 2
-    y2 = centroid[1] + park_height_deg / 2
+    x1 = x_center - park_width_m / 2
+    y1 = y_center - park_height_m / 2
+    x2 = x_center + park_width_m / 2
+    y2 = y_center + park_height_m / 2
     
-    park = box(x1, y1, x2, y2)
+    park_meters = box(x1, y1, x2, y2)
+    
+    # Transform back to lat/lon
+    park_latlon = transform(project_to_latlon, park_meters)
     
     # Check if park is FULLY within boundary (not just intersecting)
-    if not boundary_poly.contains(park):
+    if not boundary_poly.contains(park_latlon):
         return None  # Park extends outside boundary, reject it
     
-    # Verify area meets minimum requirement
-    gdf = gpd.GeoDataFrame([1], geometry=[park], crs="EPSG:4326")
+    # Verify area meets minimum requirement (using projected coordinates for accurate area)
+    gdf = gpd.GeoDataFrame([1], geometry=[park_latlon], crs="EPSG:4326")
     gdf_projected = gdf.to_crs("EPSG:3857")
     actual_area_m2 = gdf_projected.geometry[0].area
     
     if actual_area_m2 >= 3000:  # Minimum 0.3 ha
-        return park
+        return park_latlon
     
     return None
 
@@ -241,6 +305,11 @@ def refine_park_positions(parks, boundary_poly, service_distance_deg, target_are
     """
     if len(parks) <= 1:
         return parks
+    
+    # Calculate service distance in meters
+    # Note: service_distance_deg is legacy parameter, we'll use meters
+    # Extract from first park's approximate size or use default
+    service_distance_m = service_distance_deg * lon_per_m  # Approximate conversion
     
     st.info("🔧 Refining park positions (continuous optimization)...")
     
@@ -502,7 +571,7 @@ def find_minimum_parks_optimal(boundary_poly, min_area_ha=0.5, max_area_ha=2.0, 
     coverage_dict = {}
     
     for park_id, park in candidate_parks:
-        park_buffer = park.buffer(service_distance_deg)
+        park_buffer = create_buffer_projected(park, service_distance_m)
         covered_points = []
         
         for i, point in enumerate(demand_points):
@@ -538,7 +607,7 @@ def find_minimum_parks_optimal(boundary_poly, min_area_ha=0.5, max_area_ha=2.0, 
     st.success(f"🎯 Optimal solution found: {len(selected_parks)} parks (provably minimal!)")
     
     # Record optimal state
-    optimal_coverage = 100 * unary_union([p.buffer(service_distance_deg) for p in selected_parks]).intersection(boundary_poly).area / boundary_area_m2 if selected_parks else 0
+    optimal_coverage = 100 * unary_union([create_buffer_projected(p, service_distance_m) for p in selected_parks]).intersection(boundary_poly).area / boundary_area_m2 if selected_parks else 0
     
     st.session_state.algorithm_steps.append({
         'type': 'optimal_solution',
@@ -950,21 +1019,16 @@ def create_park_buffers(parks, park_size_ha=1.25):
     """
     Create service area buffers around parks.
     Service distance scales with park size: 0.5ha→150m, 2.0ha→300m
+    Buffers created in projected coordinates for proper circular shape.
     """
     if not parks:
         return []
     
-    lats = [p.centroid.y for p in parks]
-    ref_lat = np.median(lats)
-    
     # Calculate service distance based on park size
     service_distance_m = calculate_service_distance(park_size_ha)
-    buffer_deg = meters_to_degrees(service_distance_m, ref_lat)
     
-    buffers = []
-    for park in parks:
-        buffer_poly = park.buffer(buffer_deg)
-        buffers.append(buffer_poly)
+    # Create buffers using projected coordinates
+    buffers = [create_buffer_projected(park, service_distance_m) for park in parks]
     
     return buffers
 
