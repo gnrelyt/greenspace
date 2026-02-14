@@ -67,29 +67,20 @@ def create_buffer_projected(geometry, buffer_distance_m):
         Buffered geometry in EPSG:4326 (lat/lon)
     """
     from shapely.ops import transform
-    import pyproj
-    from functools import partial
+    from pyproj import Transformer
     
-    # Create transformer to/from Web Mercator (EPSG:3857)
-    project_to_meters = partial(
-        pyproj.transform,
-        pyproj.Proj('EPSG:4326'),  # WGS84 (lat/lon)
-        pyproj.Proj('EPSG:3857')   # Web Mercator (meters)
-    )
-    project_to_latlon = partial(
-        pyproj.transform,
-        pyproj.Proj('EPSG:3857'),  # Web Mercator (meters)
-        pyproj.Proj('EPSG:4326')   # WGS84 (lat/lon)
-    )
+    # Create transformers using modern pyproj API
+    transformer_to_meters = Transformer.from_crs("EPSG:4326", "EPSG:3857", always_xy=True)
+    transformer_to_latlon = Transformer.from_crs("EPSG:3857", "EPSG:4326", always_xy=True)
     
     # Transform to meters
-    geom_meters = transform(project_to_meters, geometry)
+    geom_meters = transform(transformer_to_meters.transform, geometry)
     
-    # Create buffer in meters
+    # Create buffer in meters (perfect circle)
     buffer_meters = geom_meters.buffer(buffer_distance_m)
     
     # Transform back to lat/lon
-    buffer_latlon = transform(project_to_latlon, buffer_meters)
+    buffer_latlon = transform(transformer_to_latlon.transform, buffer_meters)
     
     return buffer_latlon
 
@@ -173,42 +164,35 @@ def create_park_at_location(centroid, target_area_m2, boundary_poly, lon_per_m, 
     Parks are square (aspect ratio 1.0) for clean, simple appearance.
     """
     from shapely.ops import transform
-    import pyproj
-    from functools import partial
+    from pyproj import Transformer
     
-    # Create transformer to/from Web Mercator (EPSG:3857) for accurate meter-based geometry
-    project_to_meters = partial(
-        pyproj.transform,
-        pyproj.Proj('EPSG:4326'),  # WGS84 (lat/lon)
-        pyproj.Proj('EPSG:3857')   # Web Mercator (meters)
-    )
-    project_to_latlon = partial(
-        pyproj.transform,
-        pyproj.Proj('EPSG:3857'),  # Web Mercator (meters)
-        pyproj.Proj('EPSG:4326')   # WGS84 (lat/lon)
-    )
+    # Create transformers using modern pyproj API
+    # From WGS84 (lat/lon) to Web Mercator (meters)
+    transformer_to_meters = Transformer.from_crs("EPSG:4326", "EPSG:3857", always_xy=True)
+    # From Web Mercator (meters) to WGS84 (lat/lon)
+    transformer_to_latlon = Transformer.from_crs("EPSG:3857", "EPSG:4326", always_xy=True)
     
     # Transform centroid to meters
     centroid_point = Point(centroid[0], centroid[1])
-    centroid_meters = transform(project_to_meters, centroid_point)
+    centroid_meters = transform(transformer_to_meters.transform, centroid_point)
     
     # Calculate park dimensions in meters (aspect ratio 1.0 = square)
-    aspect_ratio = 1.0  # Square parks
     park_side_m = np.sqrt(target_area_m2)  # For square: side = √area
     
     # Create park square in meters
     x_center = centroid_meters.x
     y_center = centroid_meters.y
     
-    x1 = x_center - park_side_m / 2
-    y1 = y_center - park_side_m / 2
-    x2 = x_center + park_side_m / 2
-    y2 = y_center + park_side_m / 2
+    half_side = park_side_m / 2
+    x1 = x_center - half_side
+    y1 = y_center - half_side
+    x2 = x_center + half_side
+    y2 = y_center + half_side
     
     park_meters = box(x1, y1, x2, y2)
     
     # Transform back to lat/lon
-    park_latlon = transform(project_to_latlon, park_meters)
+    park_latlon = transform(transformer_to_latlon.transform, park_meters)
     
     # Check if park is FULLY within boundary (not just intersecting)
     if not boundary_poly.contains(park_latlon):
