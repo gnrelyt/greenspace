@@ -1102,12 +1102,23 @@ if not st.session_state.optimization_run:
     if map_data and 'all_drawings' in map_data and map_data['all_drawings']:
         for drawing in map_data['all_drawings']:
             if drawing['geometry']['type'] == 'Polygon':
-                coords_str = json.dumps(drawing['geometry']['coordinates'])
+                # Only process new drawings from the Draw plugin
+                # Skip if this drawing matches any existing geojson_feature by comparing coordinates
+                coords_str = json.dumps(drawing['geometry']['coordinates'], sort_keys=True)
                 
+                # Check if this exact geometry already exists in our stored features
                 is_duplicate = any(
-                    json.dumps(f['geometry']['coordinates']) == coords_str
+                    json.dumps(f['geometry']['coordinates'], sort_keys=True) == coords_str
                     for f in st.session_state.geojson_features
                 )
+                
+                # Also skip if this drawing has properties matching our stored features
+                # (indicates it's a re-rendered feature, not a new user drawing)
+                if 'properties' in drawing and drawing.get('properties'):
+                    props = drawing['properties']
+                    if 'id' in props and 'created' in props:
+                        # This looks like a re-rendered feature, skip it
+                        is_duplicate = True
                 
                 if not is_duplicate:
                     feature = {
@@ -1115,6 +1126,7 @@ if not st.session_state.optimization_run:
                         "geometry": drawing['geometry'],
                         "properties": {
                             "id": len(st.session_state.geojson_features) + 1,
+                            "feature_type": "boundary",
                             "created": datetime.now().isoformat()
                         }
                     }
