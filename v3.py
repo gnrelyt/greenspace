@@ -204,12 +204,127 @@ def create_park_at_location(centroid, target_area_m2, boundary_poly, lon_per_m, 
     return park_latlon if actual_area_m2 >= 3000 else None
 
 # ============================================================================
+# BUILD LIVE MAP FUNCTION
+# ============================================================================
+
+def build_live_map(boundary_poly, candidate_parks=None, selected_parks=None, 
+                   demand_points=None, service_distance_m=None, bounds=None):
+    """Build a folium map with current algorithm state (no st.empty!)."""
+    m = folium.Map(
+        location=[54.5973, -3.4360],
+        zoom_start=6,
+        tiles="OpenStreetMap"
+    )
+    
+    # Draw boundary
+    if boundary_poly is not None:
+        folium.GeoJson(
+            data={
+                "type": "Feature",
+                "geometry": {
+                    "type": "Polygon",
+                    "coordinates": [list(boundary_poly.exterior.coords)]
+                }
+            },
+            style_function=lambda x: {
+                'color': '#007bff',
+                'weight': 2,
+                'opacity': 0.8,
+                'fillOpacity': 0.2
+            }
+        ).add_to(m)
+    
+    # Draw candidate parks as light gray
+    if candidate_parks:
+        for park in candidate_parks:
+            if park.geom_type == 'Polygon':
+                folium.GeoJson(
+                    data={
+                        "type": "Feature",
+                        "geometry": {
+                            "type": "Polygon",
+                            "coordinates": [list(park.exterior.coords)]
+                        }
+                    },
+                    style_function=lambda x: {
+                        'color': '#cccccc',
+                        'weight': 1,
+                        'opacity': 0.4,
+                        'fillOpacity': 0.1
+                    }
+                ).add_to(m)
+    
+    # Draw demand points as tiny blue dots
+    if demand_points:
+        for point in demand_points:
+            folium.CircleMarker(
+                location=[point.y, point.x],
+                radius=2,
+                color='#3498db',
+                fill=True,
+                fillColor='#3498db',
+                fillOpacity=0.6,
+                weight=0.5
+            ).add_to(m)
+    
+    # Draw selected parks in green
+    if selected_parks:
+        for park in selected_parks:
+            if park.geom_type == 'Polygon':
+                folium.GeoJson(
+                    data={
+                        "type": "Feature",
+                        "geometry": {
+                            "type": "Polygon",
+                            "coordinates": [list(park.exterior.coords)]
+                        }
+                    },
+                    style_function=lambda x: {
+                        'color': '#27ae60',
+                        'weight': 2,
+                        'opacity': 0.9,
+                        'fillOpacity': 0.6
+                    }
+                ).add_to(m)
+            
+            # Draw service buffer if service distance provided
+            if service_distance_m:
+                buffer = create_buffer_projected(park, service_distance_m)
+                if buffer.geom_type == 'Polygon':
+                    folium.GeoJson(
+                        data={
+                            "type": "Feature",
+                            "geometry": {
+                                "type": "Polygon",
+                                "coordinates": [list(buffer.exterior.coords)]
+                            }
+                        },
+                        style_function=lambda x: {
+                            'color': '#ffc107',
+                            'weight': 1,
+                            'opacity': 0.2,
+                            'fillOpacity': 0.05
+                        }
+                    ).add_to(m)
+    
+    # Fit bounds
+    if bounds:
+        min_lon, min_lat, max_lon, max_lat = bounds
+        m.fit_bounds(
+            [[min_lat, min_lon], [max_lat, max_lon]],
+            padding=(50, 50)
+        )
+    
+    return m
+
+# ============================================================================
 # OPTIMIZED ILP SOLVER
 # ============================================================================
 
 def find_minimum_parks_optimal(boundary_poly, min_area_ha=0.5, max_area_ha=2.0):
     """
     Find optimal parks using ILP with finer grid.
+    Records all steps without interrupting with live updates.
     """
     try:
         from pulp import LpMinimize, LpProblem, LpVariable, lpSum, LpBinary, PULP_CBC_CMD
@@ -227,12 +342,17 @@ def find_minimum_parks_optimal(boundary_poly, min_area_ha=0.5, max_area_ha=2.0):
     
     avg_park_size = (min_area_ha + max_area_ha) / 2
     service_distance_m = calculate_service_distance(avg_park_size)
-    st.info(f"📏 Park size: {avg_park_size:.2f} ha → Service distance: {service_distance_m:.0f}m")
+    
+    progress_bar = st.progress(0)
+    status_text = st.empty()
+    
+    status_text.info(f"📏 Park size: {avg_park_size:.2f} ha → Service distance: {service_distance_m:.0f}m")
     
     ref_lat = boundary_poly.centroid.y
     lon_per_m, lat_per_m = lonlat_to_meters(0, 0, ref_lat)
     target_area_m2 = avg_park_size * 10000
     boundary_area_m2 = get_boundary_area_m2(boundary_poly)
+    bounds = get_bounds_from_polygons(st.session_state.geojson_features)
     
     # Finer grid spacing
     grid_spacing_m = service_distance_m / 3.5
@@ -250,9 +370,10 @@ def find_minimum_parks_optimal(boundary_poly, min_area_ha=0.5, max_area_ha=2.0):
     y_coords = np.linspace(miny, maxy, grid_points_y)
     
     # STEP 1: Create candidate parks
-    st.info("🔧 Creating candidate park locations...")
-    candidate_parks = []
+    status_text.info("🔧 Creating candidate park locations...")
+    progress_bar.progress(10)
     
+    candidate_parks = []
     for x in x_coords:
         for y in y_coords:
             park = create_park_at_location([x, y], target_area_m2, boundary_poly, lon_per_m, lat_per_m)
@@ -263,10 +384,20 @@ def find_minimum_parks_optimal(boundary_poly, min_area_ha=0.5, max_area_ha=2.0):
         st.error("No valid candidate parks found!")
         return []
     
-    st.info(f"✅ Created {len(candidate_parks)} candidates")
+    status_text.info(f"✅ Created {len(candidate_parks)} candidates")
+    progress_bar.progress(20)
+    
+    # Record candidate parks step
+    st.session_state.algorithm_steps.append({
+        'type': 'candidates',
+        'parks': candidate_parks.copy(),
+        'coverage': 0,
+        'description': f'Grid setup: {len(candidate_parks)} candidate locations',
+    })
     
     # STEP 2: Fine demand grid
-    st.info("📍 Creating demand points...")
+    status_text.info("📍 Creating demand points...")
+    
     demand_grid_size = max(20, min(50, int(np.sqrt(boundary_area_m2 / 10000))))
     demand_points = []
     
@@ -278,12 +409,22 @@ def find_minimum_parks_optimal(boundary_poly, min_area_ha=0.5, max_area_ha=2.0):
             if boundary_poly.contains(Point(x, y)):
                 demand_points.append(Point(x, y))
     
-    st.info(f"✅ Created {len(demand_points)} demand points")
+    status_text.info(f"✅ Created {len(demand_points)} demand points")
+    progress_bar.progress(30)
+    
+    # Record demand points step
+    st.session_state.algorithm_steps.append({
+        'type': 'demand_points',
+        'parks': candidate_parks.copy(),
+        'demand_points': demand_points.copy(),
+        'coverage': 0,
+        'description': f'Demand sampling: {len(demand_points)} coverage points',
+    })
     
     # STEP 3: Coverage matrix
-    st.info("🔍 Computing coverage relationships...")
-    coverage_dict = {}
+    status_text.info("🔍 Computing coverage relationships...")
     
+    coverage_dict = {}
     for park_idx, park in enumerate(candidate_parks):
         park_buffer = create_buffer_projected(park, service_distance_m)
         covered_points = [i for i, p in enumerate(demand_points) if park_buffer.contains(p)]
@@ -291,14 +432,15 @@ def find_minimum_parks_optimal(boundary_poly, min_area_ha=0.5, max_area_ha=2.0):
         if covered_points:
             coverage_dict[park_idx] = covered_points
     
-    st.info(f"✅ Coverage matrix ready")
+    status_text.info(f"✅ Coverage matrix ready")
+    progress_bar.progress(40)
     
     if not coverage_dict:
         st.error("No parks can cover any demand points!")
         return []
     
     # STEP 4: Solve ILP
-    st.info("🧮 Solving optimization problem...")
+    status_text.info("🧮 Solving optimization problem (ILP)...")
     
     prob = LpProblem("MinimumParkCoverage", LpMinimize)
     park_vars = {i: LpVariable(f"park_{i}", cat=LpBinary) for i in coverage_dict.keys()}
@@ -317,7 +459,8 @@ def find_minimum_parks_optimal(boundary_poly, min_area_ha=0.5, max_area_ha=2.0):
     selected_parks = [candidate_parks[i] for i in coverage_dict.keys() 
                      if park_vars[i].varValue == 1]
     
-    st.success(f"🎯 Optimal solution found: {len(selected_parks)} parks")
+    status_text.success(f"🎯 Optimal solution found: {len(selected_parks)} parks")
+    progress_bar.progress(60)
     
     optimal_coverage = calculate_coverage_percentage_fast(
         selected_parks, boundary_poly, service_distance_m, boundary_area_m2
@@ -330,48 +473,50 @@ def find_minimum_parks_optimal(boundary_poly, min_area_ha=0.5, max_area_ha=2.0):
         'description': f'Optimal (ILP): {len(selected_parks)} parks, {optimal_coverage:.1f}% coverage',
     })
     
-    # FULL REFINEMENT to remove redundant parks (3 iterations max)
+    # FULL REFINEMENT to remove redundant parks
     if len(selected_parks) > 1:
         selected_parks = refine_park_positions_full(
             selected_parks, boundary_poly, service_distance_m, 
-            target_area_m2, lon_per_m, lat_per_m, boundary_area_m2
+            target_area_m2, lon_per_m, lat_per_m, boundary_area_m2,
+            status_text, progress_bar
         )
+    
+    progress_bar.progress(100)
+    status_text.success("✨ Optimization complete!")
     
     return selected_parks
 
 # ============================================================================
-# FULL REFINEMENT (removes redundant parks) - 3 ITERATIONS
+# FULL REFINEMENT (removes redundant parks)
 # ============================================================================
 
 def refine_park_positions_full(parks, boundary_poly, service_distance_m, 
                                target_area_m2, lon_per_m, lat_per_m, 
-                               boundary_area_m2, min_coverage=99.0):
+                               boundary_area_m2, status_text, progress_bar,
+                               min_coverage=99.0):
     """
     Full refinement that removes redundant parks and optimizes positions.
-    - Merge nearby redundant parks
-    - Fine-tune park positions for better coverage
-    - Records all optimization steps
-    - 3 iterations maximum
+    3 iterations maximum.
     """
     if len(parks) <= 1:
         return parks
     
-    st.info("🔧 Refining park positions and removing redundancies...")
     ref_lat = boundary_poly.centroid.y
     service_distance_deg = meters_to_degrees(service_distance_m, ref_lat)
     
     refined_parks = parks.copy()
     iteration = 0
-    max_iterations = 3  # ✓ 3 iterations max
+    max_iterations = 3
     improvements_made = True
     
     while improvements_made and iteration < max_iterations:
         improvements_made = False
         iteration += 1
         
-        st.info(f"🔍 Refinement iteration {iteration}/{max_iterations}...")
+        status_text.info(f"🔍 Refinement iteration {iteration}/{max_iterations}...")
+        progress_bar.progress(60 + (iteration * 10))
         
-        # STEP 1: Try to merge nearby park pairs (redundancy removal)
+        # STEP 1: Try to merge nearby park pairs
         for i in range(len(refined_parks)):
             for j in range(i + 1, len(refined_parks)):
                 park_i = refined_parks[i]
@@ -381,7 +526,6 @@ def refine_park_positions_full(parks, boundary_poly, service_distance_m,
                 if distance > service_distance_deg * 2:
                     continue
                 
-                # Try to find a single position that covers both areas
                 mid_x = (park_i.centroid.x + park_j.centroid.x) / 2
                 mid_y = (park_i.centroid.y + park_j.centroid.y) / 2
                 
@@ -409,11 +553,13 @@ def refine_park_positions_full(parks, boundary_poly, service_distance_m,
                             best_merge_position = test_park
                 
                 if best_merge_position is not None:
-                    st.success(f"✅ Merged 2 parks into 1")
                     refined_parks = [p for idx, p in enumerate(refined_parks) if idx != i and idx != j] + [best_merge_position]
                     improvements_made = True
                     
                     new_coverage = calculate_coverage_percentage_fast(refined_parks, boundary_poly, service_distance_m, boundary_area_m2)
+                    
+                    status_text.info(f"✅ Merged parks {i+1} & {j+1}")
+                    
                     st.session_state.algorithm_steps.append({
                         'type': 'refinement',
                         'parks': refined_parks.copy(),
@@ -466,14 +612,15 @@ def refine_park_positions_full(parks, boundary_poly, service_distance_m,
                     if best_adjustment_coverage > current_coverage_pct + 0.1:
                         refined_parks[i] = best_adjustment
                         improvements_made = True
-                        st.info(f"📍 Fine-tuned park {i+1} position")
+                        
+                        status_text.info(f"📍 Fine-tuned park {i+1} position")
     
     final_coverage = calculate_coverage_percentage_fast(
         refined_parks, boundary_poly, service_distance_m, boundary_area_m2
     )
     
     if iteration > 1 or len(refined_parks) < len(parks):
-        st.success(f"✨ Refinement complete: {len(parks)} → {len(refined_parks)} parks, {final_coverage:.1f}% coverage")
+        status_text.success(f"✨ Refinement complete: {len(parks)} → {len(refined_parks)} parks")
         st.session_state.algorithm_steps.append({
             'type': 'final',
             'parks': refined_parks.copy(),
@@ -482,7 +629,7 @@ def refine_park_positions_full(parks, boundary_poly, service_distance_m,
             'total_removed': len(parks) - len(refined_parks)
         })
     else:
-        st.info(f"✓ {len(refined_parks)} parks, {final_coverage:.1f}% coverage (already optimal)")
+        status_text.info(f"✓ {len(refined_parks)} parks (already optimal)")
     
     return refined_parks
 
@@ -600,21 +747,23 @@ with st.sidebar:
                     min_park_size = target_park_size * 0.9
                     max_park_size = target_park_size * 1.1
                     
-                    with st.spinner("🔄 Finding optimal park locations (ILP + Refinement)..."):
-                        try:
-                            parks = find_minimum_parks_optimal(boundary, min_park_size, max_park_size)
-                            
-                            if parks:
-                                st.session_state.parks = parks
-                                st.session_state.park_buffers = create_park_buffers(parks, target_park_size)
-                                st.session_state.optimization_run = True
-                            else:
-                                st.error("No parks generated. Try adjusting park size.")
-                                st.session_state.optimization_run = False
-                        except Exception as e:
-                            st.error(f"❌ Optimization failed: {str(e)}")
-                            st.error("Please report this error with your boundary details.")
+                    try:
+                        parks = find_minimum_parks_optimal(boundary, min_park_size, max_park_size)
+                        
+                        if parks:
+                            st.session_state.parks = parks
+                            st.session_state.park_buffers = create_park_buffers(parks, target_park_size)
+                            st.session_state.optimization_run = True
+                            st.rerun()
+                        else:
+                            st.error("No parks generated. Try adjusting park size.")
                             st.session_state.optimization_run = False
+                    except Exception as e:
+                        st.error(f"❌ Optimization failed: {str(e)}")
+                        st.error("Please report this error with your boundary details.")
+                        import traceback
+                        st.error(traceback.format_exc())
+                        st.session_state.optimization_run = False
         else:
             if st.session_state.parks and len(st.session_state.parks) > 0:
                 st.success(f"✅ Optimization complete - Provably minimal solution!")
@@ -716,114 +865,114 @@ with st.sidebar:
         st.info("👉 Draw a polygon on the map to start optimization.")
 
 # ============================================================================
-# MAP
+# MAPS
 # ============================================================================
 
-st.subheader("Interactive Map")
-
-initial_center = [54.5973, -3.4360]
-initial_zoom = 6
-bounds = get_bounds_from_polygons(st.session_state.geojson_features)
-
-m = folium.Map(location=initial_center, zoom_start=initial_zoom, tiles="OpenStreetMap")
-
-from folium.plugins import Draw
-draw = Draw(
-    export=True,
-    position='topleft',
-    draw_options={
-        'polyline': False,
-        'polygon': True,
-        'rectangle': False,
-        'circle': False,
-        'marker': False,
-        'circlemarker': False
-    }
-)
-draw.add_to(m)
-
-# Display boundary polygons
-for feature in st.session_state.geojson_features:
-    folium.GeoJson(
-        data=feature,
-        style_function=lambda x: {
-            'color': '#007bff',
-            'weight': 2,
-            'opacity': 0.8,
-            'fillOpacity': 0.2
+if not st.session_state.optimization_run:
+    st.subheader("Interactive Map")
+    
+    initial_center = [54.5973, -3.4360]
+    initial_zoom = 6
+    bounds = get_bounds_from_polygons(st.session_state.geojson_features)
+    
+    m = folium.Map(location=initial_center, zoom_start=initial_zoom, tiles="OpenStreetMap")
+    
+    from folium.plugins import Draw
+    draw = Draw(
+        export=True,
+        position='topleft',
+        draw_options={
+            'polyline': False,
+            'polygon': True,
+            'rectangle': False,
+            'circle': False,
+            'marker': False,
+            'circlemarker': False
         }
-    ).add_to(m)
-
-# Display parks and buffers
-if st.session_state.current_step == -1:
-    # Final result
-    for feature in buffers_to_geojson(st.session_state.park_buffers):
-        folium.GeoJson(
-            data=feature,
-            style_function=lambda x: {
-                'color': '#ffc107',
-                'weight': 1,
-                'opacity': 0.3,
-                'fillOpacity': 0.1
-            }
-        ).add_to(m)
-    
-    for feature in parks_to_geojson(st.session_state.parks):
-        folium.GeoJson(
-            data=feature,
-            style_function=lambda x: {
-                'color': '#27ae60',
-                'weight': 2,
-                'opacity': 0.9,
-                'fillOpacity': 0.6
-            }
-        ).add_to(m)
-elif st.session_state.algorithm_steps and 0 <= st.session_state.current_step < len(st.session_state.algorithm_steps):
-    # Show step visualization
-    step_data = st.session_state.algorithm_steps[st.session_state.current_step]
-    
-    for feature in parks_to_geojson(step_data.get('parks', [])):
-        folium.GeoJson(
-            data=feature,
-            style_function=lambda x: {
-                'color': '#3498db' if step_data['type'] == 'optimal_solution' else '#27ae60',
-                'weight': 2,
-                'opacity': 0.9,
-                'fillOpacity': 0.6
-            }
-        ).add_to(m)
-
-if bounds:
-    min_lon, min_lat, max_lon, max_lat = bounds
-    m.fit_bounds(
-        [[min_lat, min_lon], [max_lat, max_lon]],
-        padding=(50, 50)
     )
-
-map_data = st_folium(m, width=1400, height=600)
-
-if map_data and 'all_drawings' in map_data and map_data['all_drawings']:
-    for drawing in map_data['all_drawings']:
-        if drawing['geometry']['type'] == 'Polygon':
-            coords_str = json.dumps(drawing['geometry']['coordinates'])
-            
-            is_duplicate = any(
-                json.dumps(f['geometry']['coordinates']) == coords_str
-                for f in st.session_state.geojson_features
-            )
-            
-            if not is_duplicate:
-                feature = {
-                    "type": "Feature",
-                    "geometry": drawing['geometry'],
-                    "properties": {
-                        "id": len(st.session_state.geojson_features) + 1,
-                        "created": datetime.now().isoformat()
+    draw.add_to(m)
+    
+    for feature in st.session_state.geojson_features:
+        folium.GeoJson(
+            data=feature,
+            style_function=lambda x: {
+                'color': '#007bff',
+                'weight': 2,
+                'opacity': 0.8,
+                'fillOpacity': 0.2
+            }
+        ).add_to(m)
+    
+    if bounds:
+        min_lon, min_lat, max_lon, max_lat = bounds
+        m.fit_bounds(
+            [[min_lat, min_lon], [max_lat, max_lon]],
+            padding=(50, 50)
+        )
+    
+    map_data = st_folium(m, width=1400, height=600)
+    
+    if map_data and 'all_drawings' in map_data and map_data['all_drawings']:
+        for drawing in map_data['all_drawings']:
+            if drawing['geometry']['type'] == 'Polygon':
+                coords_str = json.dumps(drawing['geometry']['coordinates'])
+                
+                is_duplicate = any(
+                    json.dumps(f['geometry']['coordinates']) == coords_str
+                    for f in st.session_state.geojson_features
+                )
+                
+                if not is_duplicate:
+                    feature = {
+                        "type": "Feature",
+                        "geometry": drawing['geometry'],
+                        "properties": {
+                            "id": len(st.session_state.geojson_features) + 1,
+                            "created": datetime.now().isoformat()
+                        }
                     }
-                }
-                st.session_state.geojson_features.append(feature)
-                st.session_state.cached_boundary = None
-                st.rerun()
+                    st.session_state.geojson_features.append(feature)
+                    st.session_state.cached_boundary = None
+                    st.rerun()
+
+else:
+    # After optimization - show step visualization
+    st.subheader("Algorithm Visualization")
+    
+    bounds = get_bounds_from_polygons(st.session_state.geojson_features)
+    boundary = load_boundary_polygon(st.session_state.geojson_features)
+    
+    if st.session_state.current_step == -1:
+        # Final result
+        m = build_live_map(
+            boundary,
+            selected_parks=st.session_state.parks,
+            service_distance_m=calculate_service_distance(st.session_state.park_size_ha),
+            bounds=bounds
+        )
+        st_folium(m, width=1400, height=600)
+    elif st.session_state.algorithm_steps and 0 <= st.session_state.current_step < len(st.session_state.algorithm_steps):
+        step_data = st.session_state.algorithm_steps[st.session_state.current_step]
+        
+        if step_data['type'] == 'candidates':
+            m = build_live_map(boundary, candidate_parks=step_data['parks'], bounds=bounds)
+            st.markdown("### 🔵 Candidate Park Locations (Gray)")
+        elif step_data['type'] == 'demand_points':
+            m = build_live_map(boundary, candidate_parks=step_data['parks'], 
+                             demand_points=step_data.get('demand_points'), bounds=bounds)
+            st.markdown("### 🔵 Candidates + 🔷 Demand Points")
+        elif step_data['type'] == 'optimal_solution':
+            m = build_live_map(boundary, selected_parks=step_data['parks'],
+                             service_distance_m=calculate_service_distance(st.session_state.park_size_ha),
+                             bounds=bounds)
+            st.markdown("### 🟢 ILP Optimal Solution")
+        elif step_data['type'] in ['refinement', 'final']:
+            m = build_live_map(boundary, selected_parks=step_data['parks'],
+                             service_distance_m=calculate_service_distance(st.session_state.park_size_ha),
+                             bounds=bounds)
+            st.markdown(f"### 🟢 {step_data['description']}")
+        
+        st_folium(m, width=1400, height=600)
 
 st.divider()
 
