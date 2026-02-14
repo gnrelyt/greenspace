@@ -484,7 +484,8 @@ def find_minimum_parks_optimal(boundary_poly, min_area_ha=0.5, max_area_ha=2.0, 
     boundary_area_m2 = gdf_proj.geometry[0].area
     
     # ADAPTIVE GRID CALCULATION
-    grid_spacing_m = service_distance_m / 3
+    # For square parks, use finer grid spacing for accurate coverage
+    grid_spacing_m = service_distance_m / 4  # Finer grid for square parks
     
     minx, miny, maxx, maxy = boundary_poly.bounds
     width_deg = maxx - minx
@@ -499,7 +500,7 @@ def find_minimum_parks_optimal(boundary_poly, min_area_ha=0.5, max_area_ha=2.0, 
     grid_points_y = min(grid_points_y, 40)
     
     total_grid_points = grid_points_x * grid_points_y
-    st.info(f"📐 Grid: {grid_points_x}×{grid_points_y} = {total_grid_points} candidate locations")
+    st.info(f"📐 Grid: {grid_points_x}×{grid_points_y} = {total_grid_points} candidate locations | Spacing: ~{grid_spacing_m:.0f}m (fine grid for squares)")
     
     x_coords = np.linspace(minx, maxx, grid_points_x)
     y_coords = np.linspace(miny, maxy, grid_points_y)
@@ -642,7 +643,9 @@ def find_minimum_parks(boundary_poly, min_area_ha=0.5, max_area_ha=2.0, service_
     uncovered = boundary_poly
     
     # ADAPTIVE GRID CALCULATION
-    grid_spacing_m = service_distance_m / 3
+    # For square parks, use finer grid spacing to ensure accurate coverage
+    # Grid spacing = service_distance / 4 (finer than previous /3 for rectangles)
+    grid_spacing_m = service_distance_m / 4
     
     minx, miny, maxx, maxy = boundary_poly.bounds
     width_deg = maxx - minx
@@ -657,7 +660,7 @@ def find_minimum_parks(boundary_poly, min_area_ha=0.5, max_area_ha=2.0, service_
     grid_points_y = min(grid_points_y, 50)
     
     total_grid_points = grid_points_x * grid_points_y
-    st.info(f"📐 Grid: {grid_points_x}×{grid_points_y} = {total_grid_points} candidate locations | Spacing: ~{grid_spacing_m:.0f}m")
+    st.info(f"📐 Grid: {grid_points_x}×{grid_points_y} = {total_grid_points} candidate locations | Spacing: ~{grid_spacing_m:.0f}m (fine grid for squares)")
     
     x_coords = np.linspace(minx, maxx, grid_points_x)
     y_coords = np.linspace(miny, maxy, grid_points_y)
