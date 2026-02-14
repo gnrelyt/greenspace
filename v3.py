@@ -204,15 +204,15 @@ def create_park_at_location(centroid, target_area_m2, boundary_poly, lon_per_m, 
     return park_latlon if actual_area_m2 >= 3000 else None
 
 # ============================================================================
-# OPTIMIZED ILP SOLVER (KEEPS FINE GRID + DEMAND POINTS)
+# OPTIMIZED ILP SOLVER (FINER GRID)
 # ============================================================================
 
 def find_minimum_parks_optimal(boundary_poly, min_area_ha=0.5, max_area_ha=2.0):
     """
-    Find optimal parks using ILP with FINE GRID for accuracy.
-    Optimizations (without sacrificing accuracy):
-    - Fine grid (/4) for accuracy ✓
-    - FULL demand grid for accuracy ✓
+    Find optimal parks using ILP with FINER GRID to close gaps.
+    Optimizations:
+    - Finer grid (/3.5 instead of /4) for better coverage
+    - Fine demand grid for full accuracy
     - Pre-filtered coverage matrix (only useful constraints)
     - Parallel solving with 4 threads
     - Minimal refinement (skip fine-tuning)
@@ -241,17 +241,17 @@ def find_minimum_parks_optimal(boundary_poly, min_area_ha=0.5, max_area_ha=2.0):
     target_area_m2 = avg_park_size * 10000
     boundary_area_m2 = get_boundary_area_m2(boundary_poly)
     
-    # FINE GRID FOR ACCURACY (keep original spacing)
-    grid_spacing_m = service_distance_m / 4
+    # FINER GRID (/3.5 instead of /4 for tighter spacing)
+    grid_spacing_m = service_distance_m / 3.5
     minx, miny, maxx, maxy = boundary_poly.bounds
     width_m = (maxx - minx) * lon_per_m
     height_m = (maxy - miny) * lat_per_m
     
-    grid_points_x = max(5, min(40, int(np.ceil(width_m / grid_spacing_m))))
-    grid_points_y = max(5, min(40, int(np.ceil(height_m / grid_spacing_m))))
+    grid_points_x = max(5, min(50, int(np.ceil(width_m / grid_spacing_m))))
+    grid_points_y = max(5, min(50, int(np.ceil(height_m / grid_spacing_m))))
     
     total_grid_points = grid_points_x * grid_points_y
-    st.info(f"📐 Grid: {grid_points_x}×{grid_points_y} = {total_grid_points} positions (fine grid for accuracy)")
+    st.info(f"📐 Grid: {grid_points_x}×{grid_points_y} = {total_grid_points} positions (finer grid to close gaps)")
     
     x_coords = np.linspace(minx, maxx, grid_points_x)
     y_coords = np.linspace(miny, maxy, grid_points_y)
@@ -272,10 +272,10 @@ def find_minimum_parks_optimal(boundary_poly, min_area_ha=0.5, max_area_ha=2.0):
     
     st.info(f"✅ Created {len(candidate_parks)} candidates")
     
-    # STEP 2: KEEP FINE DEMAND GRID FOR ACCURACY (matching original)
+    # STEP 2: FINE DEMAND GRID FOR ACCURACY
     st.info("📍 Creating demand points...")
     
-    # Use adaptive grid size like original
+    # Adaptive grid size like original
     demand_grid_size = max(20, min(50, int(np.sqrt(boundary_area_m2 / 10000))))
     demand_points = []
     
@@ -287,9 +287,9 @@ def find_minimum_parks_optimal(boundary_poly, min_area_ha=0.5, max_area_ha=2.0):
             if boundary_poly.contains(Point(x, y)):
                 demand_points.append(Point(x, y))
     
-    st.info(f"✅ Created {len(demand_points)} demand points (fine grid for accuracy)")
+    st.info(f"✅ Created {len(demand_points)} demand points")
     
-    # STEP 3: OPTIMIZED coverage matrix (pre-filtered to avoid useless constraints)
+    # STEP 3: OPTIMIZED coverage matrix (pre-filtered)
     st.info("🔍 Computing coverage relationships...")
     coverage_dict = {}
     
@@ -297,7 +297,7 @@ def find_minimum_parks_optimal(boundary_poly, min_area_ha=0.5, max_area_ha=2.0):
         park_buffer = create_buffer_projected(park, service_distance_m)
         covered_points = [i for i, p in enumerate(demand_points) if park_buffer.contains(p)]
         
-        # OPTIMIZATION: Only store if this park covers at least one point
+        # Only store if this park covers at least one point
         if covered_points:
             coverage_dict[park_idx] = covered_points
     
@@ -312,7 +312,7 @@ def find_minimum_parks_optimal(boundary_poly, min_area_ha=0.5, max_area_ha=2.0):
     
     prob = LpProblem("MinimumParkCoverage", LpMinimize)
     
-    # OPTIMIZATION: Only create variables for parks that cover something
+    # Only create variables for parks that cover something
     park_vars = {i: LpVariable(f"park_{i}", cat=LpBinary) for i in coverage_dict.keys()}
     
     # Objective: minimize total parks
@@ -326,7 +326,7 @@ def find_minimum_parks_optimal(boundary_poly, min_area_ha=0.5, max_area_ha=2.0):
     for j in covered_points:
         prob += lpSum(park_vars[i] for i in coverage_dict if j in coverage_dict[i]) >= 1, f"Point_{j}"
     
-    # OPTIMIZATION: Parallel solving with 4 threads, reasonable timeout
+    # Solve with parallel threads and reasonable timeout
     prob.solve(PULP_CBC_CMD(msg=0, timeLimit=120, threads=4))
     
     selected_parks = [candidate_parks[i] for i in coverage_dict.keys() 
@@ -355,7 +355,7 @@ def find_minimum_parks_optimal(boundary_poly, min_area_ha=0.5, max_area_ha=2.0):
     return selected_parks
 
 # ============================================================================
-# MINIMAL REFINEMENT (only skip redundant work, don't remove accuracy)
+# MINIMAL REFINEMENT
 # ============================================================================
 
 def refine_park_positions_minimal(parks, boundary_poly, service_distance_m, 
@@ -375,7 +375,7 @@ def refine_park_positions_minimal(parks, boundary_poly, service_distance_m,
     refined_parks = parks.copy()
     improvement_found = True
     iteration = 0
-    max_iterations = 2  # Reduced from 3-5
+    max_iterations = 2
     
     while improvement_found and iteration < max_iterations:
         improvement_found = False
