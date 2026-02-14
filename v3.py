@@ -1063,37 +1063,52 @@ else:
     bounds = get_bounds_from_polygons(st.session_state.geojson_features)
     boundary = load_boundary_polygon(st.session_state.geojson_features)
     
-    if st.session_state.current_step == -1:
-        # Final result
-        m = build_live_map(
-            boundary,
-            selected_parks=st.session_state.parks,
-            service_distance_m=calculate_service_distance(st.session_state.park_size_ha),
-            bounds=bounds
-        )
-        st_folium(m, width=1400, height=600)
-    elif st.session_state.algorithm_steps and 0 <= st.session_state.current_step < len(st.session_state.algorithm_steps):
-        step_data = st.session_state.algorithm_steps[st.session_state.current_step]
-        
-        if step_data['type'] == 'candidates':
-            m = build_live_map(boundary, candidate_parks=step_data['parks'], bounds=bounds)
-            st.markdown("### 🔵 Candidate Park Locations (Gray)")
-        elif step_data['type'] == 'demand_points':
-            m = build_live_map(boundary, candidate_parks=step_data['parks'], 
-                             demand_points=step_data.get('demand_points'), bounds=bounds)
-            st.markdown("### 🔵 Candidates + 🔷 Demand Points")
-        elif step_data['type'] == 'optimal_solution':
-            m = build_live_map(boundary, selected_parks=step_data['parks'],
-                             service_distance_m=calculate_service_distance(st.session_state.park_size_ha),
-                             bounds=bounds)
-            st.markdown("### 🟢 ILP Optimal Solution")
-        elif step_data['type'] in ['refinement', 'final']:
-            m = build_live_map(boundary, selected_parks=step_data['parks'],
-                             service_distance_m=calculate_service_distance(st.session_state.park_size_ha),
-                             bounds=bounds)
-            st.markdown(f"### 🟢 {step_data['description']}")
-        
-        st_folium(m, width=1400, height=600)
+    # Only render if boundary exists
+    if boundary is not None:
+        if st.session_state.current_step == -1:
+            # Final result
+            m = build_live_map(
+                boundary,
+                selected_parks=st.session_state.parks,
+                service_distance_m=calculate_service_distance(st.session_state.park_size_ha),
+                bounds=bounds
+            )
+            st_folium(m, width=1400, height=600)
+        elif st.session_state.algorithm_steps and 0 <= st.session_state.current_step < len(st.session_state.algorithm_steps):
+            step_data = st.session_state.algorithm_steps[st.session_state.current_step]
+            
+            if step_data['type'] == 'candidates':
+                m = build_live_map(boundary, candidate_parks=step_data['parks'], bounds=bounds)
+                st.markdown("### 🔵 Candidate Park Locations (Gray)")
+                st_folium(m, width=1400, height=600)
+            elif step_data['type'] == 'demand_points':
+                m = build_live_map(boundary, candidate_parks=step_data['parks'], 
+                                 demand_points=step_data.get('demand_points'), bounds=bounds)
+                st.markdown("### 🔵 Candidates + 🔷 Demand Points")
+                st_folium(m, width=1400, height=600)
+            elif step_data['type'] == 'optimal_solution':
+                m = build_live_map(boundary, selected_parks=step_data['parks'],
+                                 service_distance_m=calculate_service_distance(st.session_state.park_size_ha),
+                                 bounds=bounds)
+                st.markdown("### 🟢 ILP Optimal Solution")
+                st_folium(m, width=1400, height=600)
+            elif step_data['type'] in ['refinement', 'final', 'position_optimization', 'coverage_fine_tune']:
+                m = build_live_map(boundary, selected_parks=step_data['parks'],
+                                 service_distance_m=calculate_service_distance(st.session_state.park_size_ha),
+                                 bounds=bounds)
+                st.markdown(f"### 🟢 {step_data['description']}")
+                st_folium(m, width=1400, height=600)
+        else:
+            # Fallback: show final result if no valid step
+            m = build_live_map(
+                boundary,
+                selected_parks=st.session_state.parks,
+                service_distance_m=calculate_service_distance(st.session_state.park_size_ha),
+                bounds=bounds
+            )
+            st_folium(m, width=1400, height=600)
+    else:
+        st.warning("Could not load boundary for visualization")
 
 st.divider()
 
