@@ -1055,7 +1055,7 @@ if not st.session_state.optimization_run:
             padding=(50, 50)
         )
     
-    map_data = st_folium(m, width=1400, height=600)
+    map_data = st_folium(m, width=1400, height=600, key="draw_map")
     
     if map_data and 'all_drawings' in map_data and map_data['all_drawings']:
         for drawing in map_data['all_drawings']:
@@ -1081,8 +1081,9 @@ if not st.session_state.optimization_run:
                     st.rerun()
 
 else:
-    # After optimization - show step visualization
-    st.subheader("Algorithm Visualization")
+    # After optimization - show step visualization (READ-ONLY, non-interactive)
+    st.subheader("Algorithm Visualization (Step-Through Mode)")
+    st.info("📍 Hover over the map to explore. Use sidebar buttons to navigate steps.")
     
     bounds = get_bounds_from_polygons(st.session_state.geojson_features)
     boundary = load_boundary_polygon(st.session_state.geojson_features)
@@ -1097,7 +1098,7 @@ else:
                 service_distance_m=calculate_service_distance(st.session_state.park_size_ha),
                 bounds=bounds
             )
-            st_folium(m, width=1400, height=600)
+            st_folium(m, width=1400, height=600, key="final_map")
         elif st.session_state.algorithm_steps and 0 <= st.session_state.current_step < len(st.session_state.algorithm_steps):
             step_data = st.session_state.algorithm_steps[st.session_state.current_step]
             
@@ -1128,18 +1129,18 @@ else:
             if step_data['type'] == 'candidates':
                 m = build_live_map(boundary, candidate_parks=step_data['parks'], bounds=bounds)
                 st.markdown("### 🔵 Candidate Park Locations (Orange Grid)")
-                st_folium(m, width=1400, height=600)
+                st_folium(m, width=1400, height=600, key=f"step_{st.session_state.current_step}")
             elif step_data['type'] == 'demand_points':
                 m = build_live_map(boundary, candidate_parks=step_data['parks'], 
                                  demand_points=step_data.get('demand_points'), bounds=bounds)
                 st.markdown("### 🔵 Candidates (Orange) + 🔷 Demand Points (Blue)")
-                st_folium(m, width=1400, height=600)
+                st_folium(m, width=1400, height=600, key=f"step_{st.session_state.current_step}")
             elif step_data['type'] == 'optimal_solution':
                 m = build_live_map(boundary, selected_parks=step_data['parks'],
                                  service_distance_m=calculate_service_distance(st.session_state.park_size_ha),
                                  bounds=bounds)
                 st.markdown("### 🟢 ILP Optimal Solution")
-                st_folium(m, width=1400, height=600)
+                st_folium(m, width=1400, height=600, key=f"step_{st.session_state.current_step}")
             elif step_data['type'] == 'refinement':
                 # Find which parks were merged (compare to previous step)
                 previous_step = st.session_state.algorithm_steps[st.session_state.current_step - 1] if st.session_state.current_step > 0 else None
@@ -1150,7 +1151,7 @@ else:
                                  bounds=bounds,
                                  highlight_parks=highlight)
                 st.markdown(f"### 🟢 Parks (Green) | 🟡 Merged Parks (Yellow) | {step_data['description']}")
-                st_folium(m, width=1400, height=600)
+                st_folium(m, width=1400, height=600, key=f"step_{st.session_state.current_step}")
             elif step_data['type'] == 'position_optimization':
                 # Find which parks were repositioned (compare to previous step)
                 previous_step = st.session_state.algorithm_steps[st.session_state.current_step - 1] if st.session_state.current_step > 0 else None
@@ -1161,7 +1162,7 @@ else:
                                  bounds=bounds,
                                  highlight_parks=highlight)
                 st.markdown(f"### 🟢 Parks (Green) | 🟡 Repositioned Parks (Yellow) | {step_data['description']}")
-                st_folium(m, width=1400, height=600)
+                st_folium(m, width=1400, height=600, key=f"step_{st.session_state.current_step}")
             elif step_data['type'] == 'coverage_fine_tune':
                 # Find which parks were fine-tuned (compare to previous step)
                 previous_step = st.session_state.algorithm_steps[st.session_state.current_step - 1] if st.session_state.current_step > 0 else None
@@ -1172,13 +1173,13 @@ else:
                                  bounds=bounds,
                                  highlight_parks=highlight)
                 st.markdown(f"### 🟢 Parks (Green) | 🟡 Fine-tuned Parks (Yellow) | {step_data['description']}")
-                st_folium(m, width=1400, height=600)
+                st_folium(m, width=1400, height=600, key=f"step_{st.session_state.current_step}")
             elif step_data['type'] == 'final':
                 m = build_live_map(boundary, selected_parks=step_data['parks'],
                                  service_distance_m=calculate_service_distance(st.session_state.park_size_ha),
                                  bounds=bounds)
                 st.markdown(f"### ✅ Final Result | {step_data['description']}")
-                st_folium(m, width=1400, height=600)
+                st_folium(m, width=1400, height=600, key=f"step_{st.session_state.current_step}")
         else:
             # Fallback: show final result if no valid step
             m = build_live_map(
@@ -1187,7 +1188,7 @@ else:
                 service_distance_m=calculate_service_distance(st.session_state.park_size_ha),
                 bounds=bounds
             )
-            st_folium(m, width=1400, height=600)
+            st_folium(m, width=1400, height=600, key="fallback_map")
     else:
         st.warning("Could not load boundary for visualization")
         
