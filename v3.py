@@ -1101,6 +1101,30 @@ else:
         elif st.session_state.algorithm_steps and 0 <= st.session_state.current_step < len(st.session_state.algorithm_steps):
             step_data = st.session_state.algorithm_steps[st.session_state.current_step]
             
+            # Helper function to find which parks are new/moved
+            def get_changed_parks(current_step_data, previous_step_data=None):
+                """Compare parks between steps to find which ones changed."""
+                if previous_step_data is None:
+                    # First step or no previous - highlight all
+                    return current_step_data['parks']
+                
+                current_parks = current_step_data['parks']
+                previous_parks = previous_step_data['parks']
+                
+                changed = []
+                for cp in current_parks:
+                    is_new = True
+                    for pp in previous_parks:
+                        # Check if parks are at the same location (within small tolerance)
+                        if abs(cp.centroid.x - pp.centroid.x) < 0.00001 and \
+                           abs(cp.centroid.y - pp.centroid.y) < 0.00001:
+                            is_new = False
+                            break
+                    if is_new:
+                        changed.append(cp)
+                
+                return changed
+            
             if step_data['type'] == 'candidates':
                 m = build_live_map(boundary, candidate_parks=step_data['parks'], bounds=bounds)
                 st.markdown("### 🔵 Candidate Park Locations (Orange Grid)")
@@ -1117,27 +1141,36 @@ else:
                 st.markdown("### 🟢 ILP Optimal Solution")
                 st_folium(m, width=1400, height=600)
             elif step_data['type'] == 'refinement':
-                # Highlight merged parks in yellow
+                # Find which parks were merged (compare to previous step)
+                previous_step = st.session_state.algorithm_steps[st.session_state.current_step - 1] if st.session_state.current_step > 0 else None
+                highlight = get_changed_parks(step_data, previous_step)
+                
                 m = build_live_map(boundary, selected_parks=step_data['parks'],
                                  service_distance_m=calculate_service_distance(st.session_state.park_size_ha),
                                  bounds=bounds,
-                                 highlight_parks=step_data['parks'])
-                st.markdown(f"### 🟢 Parks (Green) | 🟡 Merged/New Parks (Yellow) | {step_data['description']}")
+                                 highlight_parks=highlight)
+                st.markdown(f"### 🟢 Parks (Green) | 🟡 Merged Parks (Yellow) | {step_data['description']}")
                 st_folium(m, width=1400, height=600)
             elif step_data['type'] == 'position_optimization':
-                # Highlight repositioned parks in yellow
+                # Find which parks were repositioned (compare to previous step)
+                previous_step = st.session_state.algorithm_steps[st.session_state.current_step - 1] if st.session_state.current_step > 0 else None
+                highlight = get_changed_parks(step_data, previous_step)
+                
                 m = build_live_map(boundary, selected_parks=step_data['parks'],
                                  service_distance_m=calculate_service_distance(st.session_state.park_size_ha),
                                  bounds=bounds,
-                                 highlight_parks=step_data['parks'])
+                                 highlight_parks=highlight)
                 st.markdown(f"### 🟢 Parks (Green) | 🟡 Repositioned Parks (Yellow) | {step_data['description']}")
                 st_folium(m, width=1400, height=600)
             elif step_data['type'] == 'coverage_fine_tune':
-                # Highlight fine-tuned parks in yellow
+                # Find which parks were fine-tuned (compare to previous step)
+                previous_step = st.session_state.algorithm_steps[st.session_state.current_step - 1] if st.session_state.current_step > 0 else None
+                highlight = get_changed_parks(step_data, previous_step)
+                
                 m = build_live_map(boundary, selected_parks=step_data['parks'],
                                  service_distance_m=calculate_service_distance(st.session_state.park_size_ha),
                                  bounds=bounds,
-                                 highlight_parks=step_data['parks'])
+                                 highlight_parks=highlight)
                 st.markdown(f"### 🟢 Parks (Green) | 🟡 Fine-tuned Parks (Yellow) | {step_data['description']}")
                 st_folium(m, width=1400, height=600)
             elif step_data['type'] == 'final':
@@ -1157,7 +1190,7 @@ else:
             st_folium(m, width=1400, height=600)
     else:
         st.warning("Could not load boundary for visualization")
-
+        
 st.divider()
 
 with st.expander("📋 Map Legend"):
