@@ -522,7 +522,7 @@ def find_minimum_parks_optimal(boundary_poly, min_area_ha=0.5, max_area_ha=2.0):
     return selected_parks
 
 # ============================================================================
-# FULL REFINEMENT (removes redundant parks)
+# FULL REFINEMENT (removes redundant parks + optimizes positions)
 # ============================================================================
 
 def refine_park_positions_full(parks, boundary_poly, service_distance_m, 
@@ -530,7 +530,10 @@ def refine_park_positions_full(parks, boundary_poly, service_distance_m,
                                boundary_area_m2, status_text, progress_bar,
                                min_coverage=99.0):
     """
-    Full refinement that removes redundant parks and optimizes positions.
+    Full refinement that:
+    1. Removes redundant parks (merging)
+    2. Optimizes individual park positions to reduce overlaps
+    3. Fine-tunes positions for better coverage
     3 iterations maximum.
     """
     if len(parks) <= 1:
@@ -608,7 +611,82 @@ def refine_park_positions_full(parks, boundary_poly, service_distance_m,
             if improvements_made:
                 break
         
-        # STEP 2: Fine-tune individual park positions
+        # STEP 2: Optimize park positions to reduce overlaps
+        if not improvements_made:
+            for i in range(len(refined_parks)):
+                park = refined_parks[i]
+                
+                # Calculate current overlap with other parks
+                current_buffer = create_buffer_projected(park, service_distance_m)
+                current_coverage = calculate_coverage_percentage_fast(refined_parks, boundary_poly, service_distance_m, boundary_area_m2)
+                
+                best_position = None
+                best_coverage = current_coverage
+                best_overlap_reduction = 0
+                
+                current_x = park.centroid.x
+                current_y = park.centroid.y
+                
+                # Search radius for position optimization
+                search_radius = service_distance_deg * 0.3
+                
+                # Try shifting the park in different directions
+                for angle in np.linspace(0, 2 * np.pi, 16, endpoint=False):
+                    for radius in [search_radius * 0.3, search_radius * 0.6, search_radius]:
+                        test_x = current_x + radius * np.cos(angle)
+                        test_y = current_y + radius * np.sin(angle)
+                        
+                        test_park = create_park_at_location([test_x, test_y], target_area_m2, boundary_poly, lon_per_m, lat_per_m)
+                        if test_park is None:
+                            continue
+                        
+                        # Test new configuration
+                        test_parks = [p if idx != i else test_park for idx, p in enumerate(refined_parks)]
+                        
+                        test_coverage = calculate_coverage_percentage_fast(
+                            test_parks, boundary_poly, service_distance_m, boundary_area_m2
+                        )
+                        
+                        # Calculate overlap reduction
+                        test_buffer = create_buffer_projected(test_park, service_distance_m)
+                        other_buffers = [create_buffer_projected(refined_parks[idx], service_distance_m) 
+                                       for idx in range(len(refined_parks)) if idx != i]
+                        
+                        if other_buffers:
+                            other_union = unary_union(other_buffers)
+                            current_overlap = current_buffer.intersection(other_union).area
+                            test_overlap = test_buffer.intersection(other_union).area
+                            overlap_reduction = current_overlap - test_overlap
+                        else:
+                            overlap_reduction = 0
+                        
+                        # Prefer positions that maintain/improve coverage while reducing overlap
+                        if test_coverage >= current_coverage - 0.1:  # Allow slight coverage loss for overlap reduction
+                            if overlap_reduction > best_overlap_reduction or \
+                               (overlap_reduction == best_overlap_reduction and test_coverage > best_coverage):
+                                best_overlap_reduction = overlap_reduction
+                                best_coverage = test_coverage
+                                best_position = test_park
+                
+                # Apply position optimization if it improves things
+                if best_position is not None and best_overlap_reduction > 0:
+                    refined_parks[i] = best_position
+                    improvements_made = True
+                    
+                    new_coverage = calculate_coverage_percentage_fast(refined_parks, boundary_poly, service_distance_m, boundary_area_m2)
+                    
+                    status_text.info(f"📍 Optimized park {i+1} position (reduced overlap, {new_coverage:.1f}% coverage)")
+                    
+                    st.session_state.algorithm_steps.append({
+                        'type': 'position_optimization',
+                        'parks': refined_parks.copy(),
+                        'coverage': new_coverage,
+                        'description': f'Position optimization: Park {i+1} repositioned to reduce overlaps',
+                        'iteration': iteration
+                    })
+                    break
+        
+        # STEP 3: Fine-tune positions for better coverage
         if not improvements_made:
             for i in range(len(refined_parks)):
                 park = refined_parks[i]
@@ -618,10 +696,12 @@ def refine_park_positions_full(parks, boundary_poly, service_distance_m,
                 
                 current_x = park.centroid.x
                 current_y = park.centroid.y
+                current_coverage = calculate_coverage_percentage_fast(refined_parks, boundary_poly, service_distance_m, boundary_area_m2)
                 
-                adjustment_radius = service_distance_deg * 0.2
+                # Smaller search radius for fine-tuning
+                adjustment_radius = service_distance_deg * 0.15
                 
-                for angle in np.linspace(0, 2 * np.pi, 16, endpoint=False):
+                for angle in np.linspace(0, 2 * np.pi, 12, endpoint=False):
                     for radius in [adjustment_radius * 0.5, adjustment_radius]:
                         test_x = current_x + radius * np.cos(angle)
                         test_y = current_y + radius * np.sin(angle)
@@ -640,22 +720,28 @@ def refine_park_positions_full(parks, boundary_poly, service_distance_m,
                             best_adjustment_coverage = test_coverage
                             best_adjustment = test_park
                 
-                if best_adjustment is not None:
-                    current_buffers = [create_buffer_projected(p, service_distance_m) for p in refined_parks]
-                    current_coverage_pct = 100 * unary_union(current_buffers).intersection(boundary_poly).area / boundary_area_m2
+                # Apply fine-tuning if it improves coverage
+                if best_adjustment is not None and best_adjustment_coverage > current_coverage + 0.05:
+                    refined_parks[i] = best_adjustment
+                    improvements_made = True
                     
-                    if best_adjustment_coverage > current_coverage_pct + 0.1:
-                        refined_parks[i] = best_adjustment
-                        improvements_made = True
-                        
-                        status_text.info(f"📍 Fine-tuned park {i+1} position")
+                    status_text.info(f"✨ Fine-tuned park {i+1} for better coverage (+{best_adjustment_coverage - current_coverage:.1f}%)")
+                    
+                    st.session_state.algorithm_steps.append({
+                        'type': 'coverage_fine_tune',
+                        'parks': refined_parks.copy(),
+                        'coverage': best_adjustment_coverage,
+                        'description': f'Coverage fine-tune: Park {i+1} repositioned',
+                        'iteration': iteration
+                    })
+                    break
     
     final_coverage = calculate_coverage_percentage_fast(
         refined_parks, boundary_poly, service_distance_m, boundary_area_m2
     )
     
     if iteration > 1 or len(refined_parks) < len(parks):
-        status_text.success(f"✨ Refinement complete: {len(parks)} → {len(refined_parks)} parks")
+        status_text.success(f"✨ Refinement complete: {len(parks)} → {len(refined_parks)} parks, optimized positions")
         st.session_state.algorithm_steps.append({
             'type': 'final',
             'parks': refined_parks.copy(),
