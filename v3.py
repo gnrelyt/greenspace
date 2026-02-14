@@ -960,7 +960,7 @@ with st.sidebar:
                             st.session_state.optimization_run = False
             
             # HALT BUTTON - Inside the conditional
-            if st.button("⏹️ Halt Algorithm", use_container_width=True, type="danger"):
+            if st.button("⏹️ Halt Algorithm", use_container_width=True, type="primary"):
                 st.session_state.optimization_halted = True
                 st.session_state.optimization_run = False
                 st.warning("⏹️ Optimization halted by user")
