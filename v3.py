@@ -162,6 +162,27 @@ def get_bounds_from_polygons(features):
     
     return (min(lons), min(lats), max(lons), max(lats))
 
+def is_boundary_feature(feature):
+    """
+    Check if a feature is a boundary (user-drawn polygon).
+    Returns True for:
+    - Features with feature_type == "boundary"
+    - Features without feature_type property (backward compatibility)
+    Returns False for:
+    - Features with feature_type != "boundary"
+    - Features with type == "park" or "park_buffer" (legacy parks/buffers)
+    """
+    feature_type = feature.get('properties', {}).get('feature_type')
+    legacy_type = feature.get('properties', {}).get('type')
+    
+    # Skip if this is explicitly a non-boundary feature
+    if feature_type and feature_type != 'boundary':
+        return False
+    if legacy_type in ['park', 'park_buffer']:
+        return False
+    
+    return True
+
 def load_boundary_polygon(features):
     """Load and merge boundary polygons."""
     if not features:
@@ -169,15 +190,9 @@ def load_boundary_polygon(features):
     
     polygons = []
     for feature in features:
-        # Only process boundary-type features (or features without feature_type for backward compatibility)
-        feature_type = feature.get('properties', {}).get('feature_type')
-        legacy_type = feature.get('properties', {}).get('type')  # parks/buffers use "type" not "feature_type"
-        
-        # Skip if this is explicitly a non-boundary feature
-        if feature_type and feature_type != 'boundary':
-            continue  # Skip features with feature_type != boundary
-        if legacy_type in ['park', 'park_buffer']:
-            continue  # Skip parks and buffers
+        # Only process boundary-type features
+        if not is_boundary_feature(feature):
+            continue
             
         if feature['geometry']['type'] == 'Polygon':
             coords = feature['geometry']['coordinates'][0]
@@ -1002,12 +1017,7 @@ with st.sidebar:
             
             st.divider()
             # Count only boundary-type features (exclude any parks/buffers that might be in the list)
-            boundary_count = sum(
-                1 for f in st.session_state.geojson_features 
-                if (f.get('properties', {}).get('feature_type') == 'boundary' 
-                    or 'feature_type' not in f.get('properties', {}))  # backward compatibility
-                and f.get('properties', {}).get('type') not in ['park', 'park_buffer']  # exclude parks/buffers
-            )
+            boundary_count = sum(1 for f in st.session_state.geojson_features if is_boundary_feature(f))
             st.info(f"📍 Boundary polygons: {boundary_count}")
             
             if st.session_state.algorithm_steps:
@@ -1131,7 +1141,7 @@ if not st.session_state.optimization_run:
                 
                 # Also skip if this drawing has properties matching our stored features
                 # (indicates it's a re-rendered feature, not a new user drawing)
-                if 'properties' in drawing and drawing.get('properties'):
+                if drawing.get('properties'):
                     props = drawing['properties']
                     if 'id' in props and 'created' in props:
                         # This looks like a re-rendered feature, skip it
