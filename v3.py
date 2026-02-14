@@ -883,47 +883,47 @@ with st.sidebar:
             st.caption(f"🎯 Service area: {service_dist:.0f}m radius")
             st.divider()
         
-        if not st.session_state.optimization_run:
-            st.info("📝 Adjust park size, then click to find optimal solution")
+if not st.session_state.optimization_run:
+    st.info("📝 Adjust park size, then click to find optimal solution")
+    
+    if st.button("🚀 Find Optimal Parks", use_container_width=True, type="primary"):
+        if boundary is not None:
+            target_park_size = st.session_state.park_size_ha
+            min_park_size = target_park_size * 0.9
+            max_park_size = target_park_size * 1.1
             
-            if st.button("🚀 Find Optimal Parks", use_container_width=True, type="primary"):
-                if boundary is not None:
-                    target_park_size = st.session_state.park_size_ha
-                    min_park_size = target_park_size * 0.9
-                    max_park_size = target_park_size * 1.1
-                    
-                    try:
-                        parks = find_minimum_parks_optimal(boundary, min_park_size, max_park_size)
-                        
-                        if parks:
-                            st.session_state.parks = parks
-                            st.session_state.park_buffers = create_park_buffers(parks, target_park_size)
-                            st.session_state.optimization_run = True
-                            st.rerun()
-                        else:
-                            st.error("No parks generated. Try adjusting park size.")
-                            st.session_state.optimization_run = False
-                    except Exception as e:
-                        st.error(f"❌ Optimization failed: {str(e)}")
-                        st.error("Please report this error with your boundary details.")
-                        import traceback
-                        st.error(traceback.format_exc())
-                        st.session_state.optimization_run = False
-        else:
-            if st.session_state.parks and len(st.session_state.parks) > 0:
-                st.success(f"✅ Optimization complete - Provably minimal solution!")
-                st.info(f"🏞️ Park size: {st.session_state.park_size_ha} ha")
-            else:
-                st.warning("⚠️ No parks generated. Try adjusting park size or redrawing boundary.")
+            try:
+                parks = find_minimum_parks_optimal(boundary, min_park_size, max_park_size)
+                
+                if parks:
+                    st.session_state.parks = parks
+                    st.session_state.park_buffers = create_park_buffers(parks, target_park_size)
+                    st.session_state.optimization_run = True
+                    st.rerun()
+                else:
+                    st.error("No parks generated. Try adjusting park size.")
+                    st.session_state.optimization_run = False
+            except Exception as e:
+                st.error(f"❌ Optimization failed: {str(e)}")
+                st.error("Please report this error with your boundary details.")
+                import traceback
+                st.error(traceback.format_exc())
                 st.session_state.optimization_run = False
-            
-            if st.button("📏 Try Different Park Size", use_container_width=True):
-                st.session_state.optimization_run = False
-                st.session_state.parks = []
-                st.session_state.park_buffers = []
-                st.session_state.algorithm_steps = []
-                st.session_state.current_step = -1
-                st.rerun()
+else:
+    if st.session_state.parks and len(st.session_state.parks) > 0:
+        st.success(f"✅ Optimization complete - Provably minimal solution!")
+        st.info(f"🏞️ Park size: {st.session_state.park_size_ha} ha")
+    else:
+        st.warning("⚠️ No parks generated. Try adjusting park size or redrawing boundary.")
+        st.session_state.optimization_run = False
+    
+    if st.button("📏 Try Different Park Size", use_container_width=True):
+        st.session_state.optimization_run = False
+        st.session_state.parks = []
+        st.session_state.park_buffers = []
+        st.session_state.algorithm_steps = []
+        st.session_state.current_step = -1
+        st.rerun()
         
         st.divider()
         if st.session_state.parks:
@@ -1081,9 +1081,10 @@ if not st.session_state.optimization_run:
                     st.rerun()
 
 else:
-    # After optimization - show step visualization (READ-ONLY, non-interactive)
+    # After optimization - show step visualization
+    st.warning("⚠️ **Do not interact with the map while visualization is loading.** Use sidebar buttons to navigate steps.")
     st.subheader("Algorithm Visualization (Step-Through Mode)")
-    st.info("📍 Hover over the map to explore. Use sidebar buttons to navigate steps.")
+    st.info("📍 Use the ⬅️ ➡️ 🏁 buttons in the sidebar to navigate through algorithm steps")
     
     bounds = get_bounds_from_polygons(st.session_state.geojson_features)
     boundary = load_boundary_polygon(st.session_state.geojson_features)
@@ -1098,7 +1099,6 @@ else:
                 service_distance_m=calculate_service_distance(st.session_state.park_size_ha),
                 bounds=bounds
             )
-            st_folium(m, width=1400, height=600, key="final_map")
         elif st.session_state.algorithm_steps and 0 <= st.session_state.current_step < len(st.session_state.algorithm_steps):
             step_data = st.session_state.algorithm_steps[st.session_state.current_step]
             
@@ -1106,7 +1106,6 @@ else:
             def get_changed_parks(current_step_data, previous_step_data=None):
                 """Compare parks between steps to find which ones changed."""
                 if previous_step_data is None:
-                    # First step or no previous - highlight all
                     return current_step_data['parks']
                 
                 current_parks = current_step_data['parks']
@@ -1116,7 +1115,6 @@ else:
                 for cp in current_parks:
                     is_new = True
                     for pp in previous_parks:
-                        # Check if parks are at the same location (within small tolerance)
                         if abs(cp.centroid.x - pp.centroid.x) < 0.00001 and \
                            abs(cp.centroid.y - pp.centroid.y) < 0.00001:
                             is_new = False
@@ -1129,20 +1127,16 @@ else:
             if step_data['type'] == 'candidates':
                 m = build_live_map(boundary, candidate_parks=step_data['parks'], bounds=bounds)
                 st.markdown("### 🔵 Candidate Park Locations (Orange Grid)")
-                st_folium(m, width=1400, height=600, key=f"step_{st.session_state.current_step}")
             elif step_data['type'] == 'demand_points':
                 m = build_live_map(boundary, candidate_parks=step_data['parks'], 
                                  demand_points=step_data.get('demand_points'), bounds=bounds)
                 st.markdown("### 🔵 Candidates (Orange) + 🔷 Demand Points (Blue)")
-                st_folium(m, width=1400, height=600, key=f"step_{st.session_state.current_step}")
             elif step_data['type'] == 'optimal_solution':
                 m = build_live_map(boundary, selected_parks=step_data['parks'],
                                  service_distance_m=calculate_service_distance(st.session_state.park_size_ha),
                                  bounds=bounds)
                 st.markdown("### 🟢 ILP Optimal Solution")
-                st_folium(m, width=1400, height=600, key=f"step_{st.session_state.current_step}")
             elif step_data['type'] == 'refinement':
-                # Find which parks were merged (compare to previous step)
                 previous_step = st.session_state.algorithm_steps[st.session_state.current_step - 1] if st.session_state.current_step > 0 else None
                 highlight = get_changed_parks(step_data, previous_step)
                 
@@ -1150,10 +1144,8 @@ else:
                                  service_distance_m=calculate_service_distance(st.session_state.park_size_ha),
                                  bounds=bounds,
                                  highlight_parks=highlight)
-                st.markdown(f"### 🟢 Parks (Green) | 🟡 Merged Parks (Yellow) | {step_data['description']}")
-                st_folium(m, width=1400, height=600, key=f"step_{st.session_state.current_step}")
+                st.markdown(f"### 🟢 Parks (Green) | 🟡 Merged Parks (Yellow)")
             elif step_data['type'] == 'position_optimization':
-                # Find which parks were repositioned (compare to previous step)
                 previous_step = st.session_state.algorithm_steps[st.session_state.current_step - 1] if st.session_state.current_step > 0 else None
                 highlight = get_changed_parks(step_data, previous_step)
                 
@@ -1161,10 +1153,8 @@ else:
                                  service_distance_m=calculate_service_distance(st.session_state.park_size_ha),
                                  bounds=bounds,
                                  highlight_parks=highlight)
-                st.markdown(f"### 🟢 Parks (Green) | 🟡 Repositioned Parks (Yellow) | {step_data['description']}")
-                st_folium(m, width=1400, height=600, key=f"step_{st.session_state.current_step}")
+                st.markdown(f"### 🟢 Parks (Green) | 🟡 Repositioned Parks (Yellow)")
             elif step_data['type'] == 'coverage_fine_tune':
-                # Find which parks were fine-tuned (compare to previous step)
                 previous_step = st.session_state.algorithm_steps[st.session_state.current_step - 1] if st.session_state.current_step > 0 else None
                 highlight = get_changed_parks(step_data, previous_step)
                 
@@ -1172,23 +1162,28 @@ else:
                                  service_distance_m=calculate_service_distance(st.session_state.park_size_ha),
                                  bounds=bounds,
                                  highlight_parks=highlight)
-                st.markdown(f"### 🟢 Parks (Green) | 🟡 Fine-tuned Parks (Yellow) | {step_data['description']}")
-                st_folium(m, width=1400, height=600, key=f"step_{st.session_state.current_step}")
+                st.markdown(f"### 🟢 Parks (Green) | 🟡 Fine-tuned Parks (Yellow)")
             elif step_data['type'] == 'final':
                 m = build_live_map(boundary, selected_parks=step_data['parks'],
                                  service_distance_m=calculate_service_distance(st.session_state.park_size_ha),
                                  bounds=bounds)
-                st.markdown(f"### ✅ Final Result | {step_data['description']}")
-                st_folium(m, width=1400, height=600, key=f"step_{st.session_state.current_step}")
+                st.markdown(f"### ✅ Final Result")
+            else:
+                m = build_live_map(
+                    boundary,
+                    selected_parks=st.session_state.parks,
+                    service_distance_m=calculate_service_distance(st.session_state.park_size_ha),
+                    bounds=bounds
+                )
         else:
-            # Fallback: show final result if no valid step
             m = build_live_map(
                 boundary,
                 selected_parks=st.session_state.parks,
                 service_distance_m=calculate_service_distance(st.session_state.park_size_ha),
                 bounds=bounds
             )
-            st_folium(m, width=1400, height=600, key="fallback_map")
+        
+        st_folium(m, width=1400, height=600, key=f"viz_map_{st.session_state.current_step}")
     else:
         st.warning("Could not load boundary for visualization")
         
