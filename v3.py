@@ -162,7 +162,7 @@ def get_bounds_from_polygons(features):
     
     return (min(lons), min(lats), max(lons), max(lats))
 
-def is_boundary_feature(feature):
+def is_boundary_feature(feature) -> bool:
     """
     Check if a feature is a boundary (user-drawn polygon).
     Returns True for:
@@ -1131,11 +1131,11 @@ if not st.session_state.optimization_run:
             if drawing['geometry']['type'] == 'Polygon':
                 # Only process new drawings from the Draw plugin
                 # Skip if this drawing matches any existing geojson_feature by comparing coordinates
-                coords_str = json.dumps(drawing['geometry']['coordinates'], sort_keys=True)
+                coords_str = json.dumps(drawing['geometry']['coordinates'])
                 
                 # Check if this exact geometry already exists in our stored features
                 is_duplicate = any(
-                    json.dumps(f['geometry']['coordinates'], sort_keys=True) == coords_str
+                    json.dumps(f['geometry']['coordinates']) == coords_str
                     for f in st.session_state.geojson_features
                 )
                 
