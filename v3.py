@@ -170,6 +170,7 @@ def create_park_at_location(centroid, target_area_m2, boundary_poly, lon_per_m, 
     Create a park at a given location.
     Works in projected coordinates (meters) to avoid distortion, then converts back to lat/lon.
     Park must be FULLY within boundary - no clipping allowed.
+    Parks are square (aspect ratio 1.0) for clean, simple appearance.
     """
     from shapely.ops import transform
     import pyproj
@@ -191,19 +192,18 @@ def create_park_at_location(centroid, target_area_m2, boundary_poly, lon_per_m, 
     centroid_point = Point(centroid[0], centroid[1])
     centroid_meters = transform(project_to_meters, centroid_point)
     
-    # Calculate park dimensions in meters (aspect ratio 1.5)
-    aspect_ratio = 1.5
-    park_height_m = np.sqrt(target_area_m2 / aspect_ratio)
-    park_width_m = target_area_m2 / park_height_m
+    # Calculate park dimensions in meters (aspect ratio 1.0 = square)
+    aspect_ratio = 1.0  # Square parks
+    park_side_m = np.sqrt(target_area_m2)  # For square: side = √area
     
-    # Create park rectangle in meters
+    # Create park square in meters
     x_center = centroid_meters.x
     y_center = centroid_meters.y
     
-    x1 = x_center - park_width_m / 2
-    y1 = y_center - park_height_m / 2
-    x2 = x_center + park_width_m / 2
-    y2 = y_center + park_height_m / 2
+    x1 = x_center - park_side_m / 2
+    y1 = y_center - park_side_m / 2
+    x2 = x_center + park_side_m / 2
+    y2 = y_center + park_side_m / 2
     
     park_meters = box(x1, y1, x2, y2)
     
@@ -1181,10 +1181,10 @@ with st.sidebar:
             
             # Show park size info
             park_size_m2 = st.session_state.park_size_ha * 10000
-            approx_dimensions = np.sqrt(park_size_m2 / 1.5)  # aspect ratio 1.5
+            park_side_m = np.sqrt(park_size_m2)  # Square: side = √area
             service_dist = calculate_service_distance(st.session_state.park_size_ha)
             
-            st.caption(f"≈ {approx_dimensions:.0f}m × {approx_dimensions * 1.5:.0f}m per park")
+            st.caption(f"≈ {park_side_m:.0f}m × {park_side_m:.0f}m square")
             st.caption(f"🎯 Service area: {service_dist:.0f}m radius")
             
             st.divider()
