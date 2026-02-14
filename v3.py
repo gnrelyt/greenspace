@@ -51,64 +51,69 @@ def calculate_service_distance(park_size_ha):
     2.0 ha → 300m service distance
     Linear scaling in between.
     """
-    # Linear interpolation: service_distance = 100 * park_size + 100
     service_distance_m = 100 * park_size_ha + 100
     return service_distance_m
 
-def calculate_coverage_percentage(parks, boundary_poly, service_distance_m):
-    """
-    Calculate coverage percentage using proper projected buffers.
-    Returns percentage of boundary covered by park service areas.
-    """
-    if not parks:
-        return 0.0
-    
-    # Create projected buffers for all parks
-    buffers = [create_buffer_projected(park, service_distance_m) for park in parks]
-    
-    # Union all buffers
-    covered_area = unary_union(buffers).intersection(boundary_poly)
-    
-    # Calculate percentage using projected coordinates for accuracy
-    gdf_boundary = gpd.GeoDataFrame([1], geometry=[boundary_poly], crs="EPSG:4326")
-    gdf_boundary_proj = gdf_boundary.to_crs("EPSG:3857")
-    boundary_area_m2 = gdf_boundary_proj.geometry[0].area
-    
-    gdf_covered = gpd.GeoDataFrame([1], geometry=[covered_area], crs="EPSG:4326")
-    gdf_covered_proj = gdf_covered.to_crs("EPSG:3857")
-    covered_area_m2 = gdf_covered_proj.geometry[0].area
-    
-    coverage_pct = 100 * covered_area_m2 / boundary_area_m2
-    return coverage_pct
+# Cache transformers globally for reuse (massive performance boost)
+_transformer_to_meters = None
+_transformer_to_latlon = None
+
+def get_transformers():
+    """Get or create cached transformers (avoid recreating them thousands of times)."""
+    global _transformer_to_meters, _transformer_to_latlon
+    if _transformer_to_meters is None:
+        from pyproj import Transformer
+        _transformer_to_meters = Transformer.from_crs("EPSG:4326", "EPSG:3857", always_xy=True)
+        _transformer_to_latlon = Transformer.from_crs("EPSG:3857", "EPSG:4326", always_xy=True)
+    return _transformer_to_meters, _transformer_to_latlon
 
 def create_buffer_projected(geometry, buffer_distance_m):
     """
     Create a buffer around a geometry using projected coordinates for accurate circular shape.
-    
-    Args:
-        geometry: Shapely geometry in EPSG:4326 (lat/lon)
-        buffer_distance_m: Buffer distance in meters
-    
-    Returns:
-        Buffered geometry in EPSG:4326 (lat/lon)
+    Uses cached transformers for performance.
     """
     from shapely.ops import transform
-    from pyproj import Transformer
     
-    # Create transformers using modern pyproj API
-    transformer_to_meters = Transformer.from_crs("EPSG:4326", "EPSG:3857", always_xy=True)
-    transformer_to_latlon = Transformer.from_crs("EPSG:3857", "EPSG:4326", always_xy=True)
+    to_meters, to_latlon = get_transformers()
     
     # Transform to meters
-    geom_meters = transform(transformer_to_meters.transform, geometry)
+    geom_meters = transform(to_meters.transform, geometry)
     
     # Create buffer in meters (perfect circle)
     buffer_meters = geom_meters.buffer(buffer_distance_m)
     
     # Transform back to lat/lon
-    buffer_latlon = transform(transformer_to_latlon.transform, buffer_meters)
+    buffer_latlon = transform(to_latlon.transform, buffer_meters)
     
     return buffer_latlon
+
+def calculate_coverage_percentage(parks, boundary_poly, service_distance_m):
+    """
+    Calculate coverage percentage using proper projected buffers.
+    Optimized with batch operations.
+    """
+    if not parks:
+        return 0.0
+    
+    # Create all buffers at once (more efficient)
+    buffers = [create_buffer_projected(park, service_distance_m) for park in parks]
+    
+    # Union all buffers and intersect with boundary
+    covered_area = unary_union(buffers).intersection(boundary_poly)
+    
+    # Calculate areas using projected coordinates (batch operation)
+    gdf_boundary = gpd.GeoDataFrame([1], geometry=[boundary_poly], crs="EPSG:4326")
+    gdf_boundary_proj = gdf_boundary.to_crs("EPSG:3857")
+    boundary_area_m2 = gdf_boundary_proj.geometry[0].area
+    
+    if covered_area.is_empty:
+        return 0.0
+    
+    gdf_covered = gpd.GeoDataFrame([1], geometry=[covered_area], crs="EPSG:4326")
+    gdf_covered_proj = gdf_covered.to_crs("EPSG:3857")
+    covered_area_m2 = gdf_covered_proj.geometry[0].area
+    
+    return 100 * covered_area_m2 / boundary_area_m2
 
 def calculate_area_hectares(coords):
     """
@@ -188,43 +193,37 @@ def create_park_at_location(centroid, target_area_m2, boundary_poly, lon_per_m, 
     Works in projected coordinates (meters) to avoid distortion, then converts back to lat/lon.
     Park must be FULLY within boundary - no clipping allowed.
     Parks are square (aspect ratio 1.0) for clean, simple appearance.
+    Uses cached transformers for performance.
     """
     from shapely.ops import transform
-    from pyproj import Transformer
     
-    # Create transformers using modern pyproj API
-    # From WGS84 (lat/lon) to Web Mercator (meters)
-    transformer_to_meters = Transformer.from_crs("EPSG:4326", "EPSG:3857", always_xy=True)
-    # From Web Mercator (meters) to WGS84 (lat/lon)
-    transformer_to_latlon = Transformer.from_crs("EPSG:3857", "EPSG:4326", always_xy=True)
+    # Get cached transformers (avoids recreating them every time)
+    to_meters, to_latlon = get_transformers()
     
     # Transform centroid to meters
     centroid_point = Point(centroid[0], centroid[1])
-    centroid_meters = transform(transformer_to_meters.transform, centroid_point)
+    centroid_meters = transform(to_meters.transform, centroid_point)
     
-    # Calculate park dimensions in meters (aspect ratio 1.0 = square)
-    park_side_m = np.sqrt(target_area_m2)  # For square: side = √area
+    # Calculate park dimensions in meters (square)
+    park_side_m = np.sqrt(target_area_m2)
     
     # Create park square in meters
-    x_center = centroid_meters.x
-    y_center = centroid_meters.y
-    
     half_side = park_side_m / 2
-    x1 = x_center - half_side
-    y1 = y_center - half_side
-    x2 = x_center + half_side
-    y2 = y_center + half_side
+    x1 = centroid_meters.x - half_side
+    y1 = centroid_meters.y - half_side
+    x2 = centroid_meters.x + half_side
+    y2 = centroid_meters.y + half_side
     
     park_meters = box(x1, y1, x2, y2)
     
     # Transform back to lat/lon
-    park_latlon = transform(transformer_to_latlon.transform, park_meters)
+    park_latlon = transform(to_latlon.transform, park_meters)
     
-    # Check if park is FULLY within boundary (not just intersecting)
+    # Check if park is FULLY within boundary
     if not boundary_poly.contains(park_latlon):
-        return None  # Park extends outside boundary, reject it
+        return None
     
-    # Verify area meets minimum requirement (using projected coordinates for accurate area)
+    # Quick area check (already know it's close to target)
     gdf = gpd.GeoDataFrame([1], geometry=[park_latlon], crs="EPSG:4326")
     gdf_projected = gdf.to_crs("EPSG:3857")
     actual_area_m2 = gdf_projected.geometry[0].area
@@ -330,7 +329,7 @@ def refine_park_positions(parks, boundary_poly, service_distance_m, target_area_
     
     refined_parks = parks.copy()
     iteration = 0
-    max_iterations = 5
+    max_iterations = 3  # Reduced from 5 for speed
     improvements_made = True
     
     while improvements_made and iteration < max_iterations:
@@ -360,8 +359,9 @@ def refine_park_positions(parks, boundary_poly, service_distance_m, target_area_
                 best_merge_coverage = 0
                 
                 search_radius = service_distance_deg * 0.8
-                for angle in np.linspace(0, 2 * np.pi, 16):
-                    for radius in np.linspace(0, search_radius, 5):
+                # Reduced from 16×5=80 to 8×3=24 positions for speed
+                for angle in np.linspace(0, 2 * np.pi, 8, endpoint=False):
+                    for radius in np.linspace(0, search_radius, 3):
                         test_x = mid_x + radius * np.cos(angle)
                         test_y = mid_y + radius * np.sin(angle)
                         
@@ -419,9 +419,10 @@ def refine_park_positions(parks, boundary_poly, service_distance_m, target_area_
                 current_y = park.centroid.y
                 
                 # Try positions in a small circle around current position
-                adjustment_radius = service_distance_deg * 0.2  # 20% of service distance
+                adjustment_radius = service_distance_deg * 0.2
                 
-                for angle in np.linspace(0, 2 * np.pi, 12):
+                # Reduced from 12×2=24 to 8×2=16 positions for speed
+                for angle in np.linspace(0, 2 * np.pi, 8, endpoint=False):
                     for radius in [adjustment_radius * 0.5, adjustment_radius]:
                         test_x = current_x + radius * np.cos(angle)
                         test_y = current_y + radius * np.sin(angle)
@@ -887,7 +888,7 @@ def consolidate_parks(parks, boundary_poly, service_distance_m, target_area_m2, 
             x_grid = np.linspace(minx, maxx, grid_size)
             y_grid = np.linspace(miny, maxy, grid_size)
             
-            for _ in range(5):  # 5 grid-based attempts
+            for _ in range(3):  # Reduced from 5 to 3 grid-based attempts for speed
                 candidate_positions = []
                 for _ in range(num_replacement_parks):
                     x = np.random.choice(x_grid)
@@ -899,7 +900,7 @@ def consolidate_parks(parks, boundary_poly, service_distance_m, target_area_m2, 
                     all_candidates.append(candidate_positions)
             
             # Strategy 2: Pure random sampling (more exploratory)
-            for _ in range(10):  # Increased from 3 to 10 attempts
+            for _ in range(6):  # Reduced from 10 to 6 attempts for speed
                 candidate_positions = []
                 attempts_per_park = 0
                 
@@ -919,7 +920,7 @@ def consolidate_parks(parks, boundary_poly, service_distance_m, target_area_m2, 
             # Strategy 3: Use existing park centroids as starting points
             if len(cluster_parks) >= num_replacement_parks:
                 # Sample from existing park positions with slight perturbation
-                for _ in range(5):
+                for _ in range(3):  # Reduced from 5 to 3 for speed
                     candidate_positions = []
                     selected_parks = np.random.choice(len(cluster_parks), num_replacement_parks, replace=False)
                     
