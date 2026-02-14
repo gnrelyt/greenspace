@@ -1,4 +1,3 @@
-
             if st.session_state.parks and len(st.session_state.parks) > 0:
                 st.success(f"✅ Optimization complete - Provably minimal solution!")
                 st.info(f"🏞️ Park size: {st.session_state.park_size_ha} ha")
