@@ -1025,6 +1025,12 @@ with st.sidebar:
                         st.metric("Coverage at this step", f"{current_step_data['coverage']:.1f}%")
         
         geojson_data = {"type": "FeatureCollection", "features": st.session_state.geojson_features}
+        
+        # Add parks if optimization has run
+        if st.session_state.parks:
+            park_features = parks_to_geojson(st.session_state.parks)
+            geojson_data["features"].extend(park_features)
+        
         st.download_button(
             label="📥 Download GeoJSON",
             data=json.dumps(geojson_data, indent=2),
