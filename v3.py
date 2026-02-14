@@ -832,24 +832,6 @@ def buffers_to_geojson(buffers):
     
     return features
 
-def centroids_to_geojson(parks):
-    """Convert park centroids to GeoJSON points."""
-    features = []
-    for idx, park in enumerate(parks):
-        features.append({
-            "type": "Feature",
-            "geometry": {
-                "type": "Point",
-                "coordinates": [park.centroid.x, park.centroid.y]
-            },
-            "properties": {
-                "id": idx,
-                "type": "park_centroid",
-                "park_number": idx + 1
-            }
-        })
-    return features
-
 def create_park_buffers(parks, park_size_ha=1.25):
     """Create service area buffers."""
     service_distance_m = calculate_service_distance(park_size_ha)
@@ -1043,16 +1025,6 @@ with st.sidebar:
                         st.metric("Coverage at this step", f"{current_step_data['coverage']:.1f}%")
         
         geojson_data = {"type": "FeatureCollection", "features": st.session_state.geojson_features}
-        
-        # Add parks if optimization has run
-        if st.session_state.parks:
-            park_features = parks_to_geojson(st.session_state.parks)
-            buffer_features = buffers_to_geojson(st.session_state.park_buffers)
-            centroid_features = centroids_to_geojson(st.session_state.parks)
-            geojson_data["features"].extend(park_features)
-            geojson_data["features"].extend(buffer_features)
-            geojson_data["features"].extend(centroid_features)
-        
         st.download_button(
             label="📥 Download GeoJSON",
             data=json.dumps(geojson_data, indent=2),
