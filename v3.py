@@ -169,6 +169,11 @@ def load_boundary_polygon(features):
     
     polygons = []
     for feature in features:
+        # Only process boundary-type features (or features without feature_type for backward compatibility)
+        feature_type = feature.get('properties', {}).get('feature_type')
+        if feature_type and feature_type != 'boundary':
+            continue  # Skip non-boundary features (parks, buffers, etc.)
+            
         if feature['geometry']['type'] == 'Polygon':
             coords = feature['geometry']['coordinates'][0]
             poly = Polygon([(c[0], c[1]) for c in coords])
@@ -991,7 +996,13 @@ with st.sidebar:
                     st.warning(f"⚠️ {100-coverage:.1f}% uncovered")
             
             st.divider()
-            st.info(f"📍 Boundary polygons: {len(st.session_state.geojson_features)}")
+            # Count only boundary-type features (exclude any parks/buffers that might be in the list)
+            boundary_count = sum(
+                1 for f in st.session_state.geojson_features 
+                if f.get('properties', {}).get('feature_type') == 'boundary' 
+                or 'feature_type' not in f.get('properties', {})  # backward compatibility
+            )
+            st.info(f"📍 Boundary polygons: {boundary_count}")
             
             if st.session_state.algorithm_steps:
                 st.divider()
