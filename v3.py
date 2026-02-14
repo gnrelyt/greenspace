@@ -55,6 +55,32 @@ def calculate_service_distance(park_size_ha):
     service_distance_m = 100 * park_size_ha + 100
     return service_distance_m
 
+def calculate_coverage_percentage(parks, boundary_poly, service_distance_m):
+    """
+    Calculate coverage percentage using proper projected buffers.
+    Returns percentage of boundary covered by park service areas.
+    """
+    if not parks:
+        return 0.0
+    
+    # Create projected buffers for all parks
+    buffers = [create_buffer_projected(park, service_distance_m) for park in parks]
+    
+    # Union all buffers
+    covered_area = unary_union(buffers).intersection(boundary_poly)
+    
+    # Calculate percentage using projected coordinates for accuracy
+    gdf_boundary = gpd.GeoDataFrame([1], geometry=[boundary_poly], crs="EPSG:4326")
+    gdf_boundary_proj = gdf_boundary.to_crs("EPSG:3857")
+    boundary_area_m2 = gdf_boundary_proj.geometry[0].area
+    
+    gdf_covered = gpd.GeoDataFrame([1], geometry=[covered_area], crs="EPSG:4326")
+    gdf_covered_proj = gdf_covered.to_crs("EPSG:3857")
+    covered_area_m2 = gdf_covered_proj.geometry[0].area
+    
+    coverage_pct = 100 * covered_area_m2 / boundary_area_m2
+    return coverage_pct
+
 def create_buffer_projected(geometry, buffer_distance_m):
     """
     Create a buffer around a geometry using projected coordinates for accurate circular shape.
@@ -230,7 +256,7 @@ def optimize_park_locations(boundary_poly, num_parks, target_area_m2, service_di
             return 1e6
         
         # Create buffers
-        buffers = [p.buffer(service_distance_deg) for p in parks]
+        buffers = [create_buffer_projected(p, service_distance_m) for p in parks]
         all_buffers = unary_union(buffers)
         
         # Calculate uncovered area
@@ -282,18 +308,14 @@ def optimize_park_locations(boundary_poly, num_parks, target_area_m2, service_di
     
     return parks
 
-def refine_park_positions(parks, boundary_poly, service_distance_deg, target_area_m2, lon_per_m, lat_per_m, min_coverage=99.0):
+def refine_park_positions(parks, boundary_poly, service_distance_m, target_area_m2, lon_per_m, lat_per_m, min_coverage=99.0):
     """
     Post-processing refinement: continuously optimize park positions and merge redundant parks.
     This fixes the discrete grid limitation by allowing parks to move to optimal positions.
+    Uses meter-based projected buffers for accurate coverage.
     """
     if len(parks) <= 1:
         return parks
-    
-    # Calculate service distance in meters
-    # Note: service_distance_deg is legacy parameter, we'll use meters
-    # Extract from first park's approximate size or use default
-    service_distance_m = service_distance_deg * lon_per_m  # Approximate conversion
     
     st.info("🔧 Refining park positions (continuous optimization)...")
     
@@ -301,6 +323,10 @@ def refine_park_positions(parks, boundary_poly, service_distance_deg, target_are
     gdf = gpd.GeoDataFrame([1], geometry=[boundary_poly], crs="EPSG:4326")
     gdf_proj = gdf.to_crs("EPSG:3857")
     boundary_area_m2 = gdf_proj.geometry[0].area
+    
+    # Convert service distance to degrees for distance calculations
+    ref_lat = boundary_poly.centroid.y
+    service_distance_deg = meters_to_degrees(service_distance_m, ref_lat)
     
     refined_parks = parks.copy()
     iteration = 0
@@ -347,7 +373,7 @@ def refine_park_positions(parks, boundary_poly, service_distance_deg, target_are
                         # Test if removing both parks and adding this one maintains coverage
                         test_parks = [p for idx, p in enumerate(refined_parks) if idx != i and idx != j] + [test_park]
                         
-                        test_buffers = [p.buffer(service_distance_deg) for p in test_parks]
+                        test_buffers = [create_buffer_projected(p, service_distance_m) for p in test_parks]
                         test_coverage_geom = unary_union(test_buffers).intersection(boundary_poly)
                         
                         gdf_test = gpd.GeoDataFrame([1], geometry=[test_coverage_geom], crs="EPSG:4326")
@@ -366,7 +392,7 @@ def refine_park_positions(parks, boundary_poly, service_distance_deg, target_are
                     improvements_made = True
                     
                     # Record refinement step
-                    new_coverage = 100 * unary_union([p.buffer(service_distance_deg) for p in refined_parks]).intersection(boundary_poly).area / boundary_area_m2
+                    new_coverage = calculate_coverage_percentage(refined_parks, boundary_poly, service_distance_m)
                     st.session_state.algorithm_steps.append({
                         'type': 'refinement',
                         'parks': refined_parks.copy(),
@@ -407,7 +433,7 @@ def refine_park_positions(parks, boundary_poly, service_distance_deg, target_are
                         # Test coverage with adjusted position
                         test_parks = [p if idx != i else test_park for idx, p in enumerate(refined_parks)]
                         
-                        test_buffers = [p.buffer(service_distance_deg) for p in test_parks]
+                        test_buffers = [create_buffer_projected(p, service_distance_m) for p in test_parks]
                         test_coverage_geom = unary_union(test_buffers).intersection(boundary_poly)
                         
                         gdf_test = gpd.GeoDataFrame([1], geometry=[test_coverage_geom], crs="EPSG:4326")
@@ -420,7 +446,7 @@ def refine_park_positions(parks, boundary_poly, service_distance_deg, target_are
                 
                 # Apply adjustment if it improves coverage
                 if best_adjustment is not None:
-                    current_buffers = [p.buffer(service_distance_deg) for p in refined_parks]
+                    current_buffers = [create_buffer_projected(p, service_distance_m) for p in refined_parks]
                     current_coverage_pct = 100 * unary_union(current_buffers).intersection(boundary_poly).area / boundary_area_m2
                     
                     if best_adjustment_coverage > current_coverage_pct + 0.1:  # At least 0.1% improvement
@@ -431,7 +457,7 @@ def refine_park_positions(parks, boundary_poly, service_distance_deg, target_are
     if iteration == 1 and not improvements_made:
         st.info("✅ No refinements needed - positions already optimal!")
     else:
-        final_coverage = 100 * unary_union([p.buffer(service_distance_deg) for p in refined_parks]).intersection(boundary_poly).area / boundary_area_m2
+        final_coverage = calculate_coverage_percentage(refined_parks, boundary_poly, service_distance_m)
         st.success(f"✨ Refinement complete: {len(parks)} → {len(refined_parks)} parks, {final_coverage:.1f}% coverage")
         
         # Record final refined state
@@ -591,8 +617,8 @@ def find_minimum_parks_optimal(boundary_poly, min_area_ha=0.5, max_area_ha=2.0, 
     
     st.success(f"🎯 Optimal solution found: {len(selected_parks)} parks (provably minimal!)")
     
-    # Record optimal state
-    optimal_coverage = 100 * unary_union([create_buffer_projected(p, service_distance_m) for p in selected_parks]).intersection(boundary_poly).area / boundary_area_m2 if selected_parks else 0
+    # Record optimal state using proper projected coverage calculation
+    optimal_coverage = calculate_coverage_percentage(selected_parks, boundary_poly, service_distance_m)
     
     st.session_state.algorithm_steps.append({
         'type': 'optimal_solution',
@@ -603,7 +629,7 @@ def find_minimum_parks_optimal(boundary_poly, min_area_ha=0.5, max_area_ha=2.0, 
     })
     
     # REFINEMENT: Improve positions and merge redundant parks
-    refined_parks = refine_park_positions(selected_parks, boundary_poly, service_distance_deg, target_area_m2, lon_per_m, lat_per_m)
+    refined_parks = refine_park_positions(selected_parks, boundary_poly, service_distance_m, target_area_m2, lon_per_m, lat_per_m)
     
     return refined_parks
 
@@ -682,7 +708,7 @@ def find_minimum_parks(boundary_poly, min_area_ha=0.5, max_area_ha=2.0, service_
     while iteration < max_iterations:
         # Calculate current coverage
         if parks:
-            buffers = [p.buffer(service_distance_deg) for p in parks]
+            buffers = [create_buffer_projected(p, service_distance_m) for p in parks]
             covered = unary_union(buffers).intersection(boundary_poly)
             uncovered = boundary_poly.difference(covered)
             
@@ -712,7 +738,7 @@ def find_minimum_parks(boundary_poly, min_area_ha=0.5, max_area_ha=2.0, service_
                     if park is None:
                         continue
                     
-                    park_buffer = park.buffer(service_distance_deg)
+                    park_buffer = create_buffer_projected(park, service_distance_m)
                     new_coverage = park_buffer.intersection(uncovered)
                     
                     if not new_coverage.is_empty:
@@ -729,7 +755,7 @@ def find_minimum_parks(boundary_poly, min_area_ha=0.5, max_area_ha=2.0, service_
         iteration += 1
         
         # Record this placement step
-        new_coverage = 100 * (1 - (boundary_poly.difference(unary_union([p.buffer(service_distance_deg) for p in parks])).area if len(parks) > 0 else boundary_area_m2) / boundary_area_m2)
+        new_coverage = 100 * (1 - (boundary_poly.difference(unary_union([create_buffer_projected(p, service_distance_m) for p in parks])).area if len(parks) > 0 else boundary_area_m2) / boundary_area_m2)
         
         st.session_state.algorithm_steps.append({
             'type': 'greedy_placement',
@@ -741,7 +767,7 @@ def find_minimum_parks(boundary_poly, min_area_ha=0.5, max_area_ha=2.0, service_
         })
     
     # Record pre-consolidation state
-    final_coverage = 100 * (1 - (boundary_poly.difference(unary_union([p.buffer(service_distance_deg) for p in parks])).area if len(parks) > 0 else 0) / boundary_area_m2)
+    final_coverage = calculate_coverage_percentage(parks, boundary_poly, service_distance_m)
     
     st.session_state.algorithm_steps.append({
         'type': 'pre_consolidation',
@@ -753,19 +779,20 @@ def find_minimum_parks(boundary_poly, min_area_ha=0.5, max_area_ha=2.0, service_
     
     # POST-PROCESSING: Consolidate parks to remove redundancies
     if len(parks) > 1:
-        parks = consolidate_parks(parks, boundary_poly, service_distance_deg, target_area_m2, lon_per_m, lat_per_m)
+        parks = consolidate_parks(parks, boundary_poly, service_distance_m, target_area_m2, lon_per_m, lat_per_m)
     
     # REFINEMENT: Improve positions and merge remaining redundant parks
     if len(parks) > 1:
-        parks = refine_park_positions(parks, boundary_poly, service_distance_deg, target_area_m2, lon_per_m, lat_per_m)
+        parks = refine_park_positions(parks, boundary_poly, service_distance_m, target_area_m2, lon_per_m, lat_per_m)
     
     return parks
 
-def consolidate_parks(parks, boundary_poly, service_distance_deg, target_area_m2, lon_per_m, lat_per_m, min_coverage=99.0):
+def consolidate_parks(parks, boundary_poly, service_distance_m, target_area_m2, lon_per_m, lat_per_m, min_coverage=99.0):
     """
     Cluster-based consolidation: identify groups of nearby parks and try to
     replace entire clusters with fewer, optimally positioned parks.
     Records steps for visualization.
+    Uses meter-based projected buffers for accurate coverage calculation.
     """
     if len(parks) <= 1:
         return parks
@@ -775,8 +802,12 @@ def consolidate_parks(parks, boundary_poly, service_distance_deg, target_area_m2
     gdf_proj = gdf.to_crs("EPSG:3857")
     boundary_area_m2 = gdf_proj.geometry[0].area
     
+    # Convert service distance to degrees for distance threshold calculations
+    ref_lat = boundary_poly.centroid.y
+    service_distance_deg = meters_to_degrees(service_distance_m, ref_lat)
+    
     # Define "nearby" as within 1.5x service distance
-    cluster_distance_threshold = service_distance_deg * 1.5
+    cluster_distance_threshold_deg = service_distance_deg * 1.5
     
     # STEP 1: Find clusters of nearby parks using distance threshold
     from scipy.cluster.hierarchy import linkage, fcluster
@@ -806,7 +837,7 @@ def consolidate_parks(parks, boundary_poly, service_distance_deg, target_area_m2
     st.session_state.algorithm_steps.append({
         'type': 'clustering',
         'parks': parks.copy(),
-        'coverage': 100 * unary_union([p.buffer(service_distance_deg) for p in parks]).intersection(boundary_poly).area / boundary_poly.area,
+        'coverage': calculate_coverage_percentage(parks, boundary_poly, service_distance_m),
         'description': f'Identified {len(cluster_dict)} cluster(s)',
         'clusters': {cid: [parks[i] for i in indices] for cid, indices in cluster_dict.items()},
         'cluster_assignments': clusters.tolist()
@@ -826,7 +857,7 @@ def consolidate_parks(parks, boundary_poly, service_distance_deg, target_area_m2
         st.info(f"🔍 Analyzing cluster {cluster_id} with {len(cluster_parks)} parks...")
         
         # Calculate what area this cluster covers
-        cluster_buffers = [p.buffer(service_distance_deg) for p in cluster_parks]
+        cluster_buffers = [create_buffer_projected(p, service_distance_m) for p in cluster_parks]
         cluster_coverage = unary_union(cluster_buffers)
         
         # Expand search area slightly beyond cluster coverage
@@ -919,7 +950,7 @@ def consolidate_parks(parks, boundary_poly, service_distance_deg, target_area_m2
                 parks_to_keep_ids = set(range(len(parks))) - set(park_indices)
                 test_parks = [parks[i] for i in parks_to_keep_ids] + new_parks
                 
-                test_buffers = [p.buffer(service_distance_deg) for p in test_parks]
+                test_buffers = [create_buffer_projected(p, service_distance_m) for p in test_parks]
                 test_coverage = unary_union(test_buffers).intersection(boundary_poly)
                 
                 gdf_test = gpd.GeoDataFrame([1], geometry=[test_coverage], crs="EPSG:4326")
@@ -966,7 +997,7 @@ def consolidate_parks(parks, boundary_poly, service_distance_deg, target_area_m2
             
             # Record consolidation step for this cluster
             temp_consolidated = consolidated_parks + all_new_parks
-            new_coverage = 100 * unary_union([p.buffer(service_distance_deg) for p in temp_consolidated]).intersection(boundary_poly).area / boundary_poly.area
+            new_coverage = calculate_coverage_percentage(temp_consolidated, boundary_poly, service_distance_m)
             
             st.session_state.algorithm_steps.append({
                 'type': 'consolidation_result',
@@ -987,7 +1018,7 @@ def consolidate_parks(parks, boundary_poly, service_distance_deg, target_area_m2
         st.success(f"✨ Smart Cluster Consolidation: Processed {total_clusters} cluster(s), removed {total_removed} park(s) total!")
         
         # Record final state
-        final_coverage = 100 * unary_union([p.buffer(service_distance_deg) for p in consolidated_parks]).intersection(boundary_poly).area / boundary_poly.area
+        final_coverage = calculate_coverage_percentage(consolidated_parks, boundary_poly, service_distance_m)
         
         st.session_state.algorithm_steps.append({
             'type': 'final',
