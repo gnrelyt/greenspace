@@ -42,8 +42,6 @@ if "park_size_ha" not in st.session_state:
     st.session_state.park_size_ha = 1.25
 if "cached_boundary_area_m2" not in st.session_state:
     st.session_state.cached_boundary_area_m2 = None
-if "optimization_halted" not in st.session_state:
-    st.session_state.optimization_halted = False
 if "refinement_intensity" not in st.session_state:
     st.session_state.refinement_intensity = 3
 
@@ -381,13 +379,12 @@ def build_live_map(boundary_poly, candidate_parks=None, selected_parks=None,
     return m
 
 # ============================================================================
-# OPTIMIZED ILP SOLVER WITH HALT SUPPORT
+# OPTIMIZED ILP SOLVER
 # ============================================================================
 
 def find_minimum_parks_optimal(boundary_poly, min_area_ha=0.5, max_area_ha=2.0):
     """
     Find optimal parks using ILP with finer grid.
-    Supports halt signal from UI.
     """
     try:
         from pulp import LpMinimize, LpProblem, LpVariable, lpSum, LpBinary, PULP_CBC_CMD
@@ -398,10 +395,6 @@ def find_minimum_parks_optimal(boundary_poly, min_area_ha=0.5, max_area_ha=2.0):
         return []
     
     if boundary_poly is None:
-        return []
-    
-    # Check halt at start
-    if st.session_state.optimization_halted:
         return []
     
     st.session_state.algorithm_steps = []
@@ -443,8 +436,6 @@ def find_minimum_parks_optimal(boundary_poly, min_area_ha=0.5, max_area_ha=2.0):
     candidate_parks = []
     for x in x_coords:
         for y in y_coords:
-            if st.session_state.optimization_halted:
-                return []
             park = create_park_at_location([x, y], target_area_m2, boundary_poly, lon_per_m, lat_per_m)
             if park is not None:
                 candidate_parks.append(park)
@@ -463,10 +454,6 @@ def find_minimum_parks_optimal(boundary_poly, min_area_ha=0.5, max_area_ha=2.0):
         'description': f'Grid setup: {len(candidate_parks)} candidate locations',
     })
     
-    # Check halt
-    if st.session_state.optimization_halted:
-        return []
-    
     # STEP 2: Fine demand grid
     status_text.info("📍 Creating demand points...")
     
@@ -478,8 +465,6 @@ def find_minimum_parks_optimal(boundary_poly, min_area_ha=0.5, max_area_ha=2.0):
     
     for x in x_demand:
         for y in y_demand:
-            if st.session_state.optimization_halted:
-                return []
             if boundary_poly.contains(Point(x, y)):
                 demand_points.append(Point(x, y))
     
@@ -494,17 +479,11 @@ def find_minimum_parks_optimal(boundary_poly, min_area_ha=0.5, max_area_ha=2.0):
         'description': f'Demand sampling: {len(demand_points)} coverage points',
     })
     
-    # Check halt
-    if st.session_state.optimization_halted:
-        return []
-    
     # STEP 3: Coverage matrix
     status_text.info("🔍 Computing coverage relationships...")
     
     coverage_dict = {}
     for park_idx, park in enumerate(candidate_parks):
-        if st.session_state.optimization_halted:
-            return []
         park_buffer = create_buffer_projected(park, service_distance_m)
         covered_points = [i for i, p in enumerate(demand_points) if park_buffer.contains(p)]
         
@@ -516,10 +495,6 @@ def find_minimum_parks_optimal(boundary_poly, min_area_ha=0.5, max_area_ha=2.0):
     
     if not coverage_dict:
         st.error("No parks can cover any demand points!")
-        return []
-    
-    # Check halt
-    if st.session_state.optimization_halted:
         return []
     
     # STEP 4: Solve ILP
@@ -538,10 +513,6 @@ def find_minimum_parks_optimal(boundary_poly, min_area_ha=0.5, max_area_ha=2.0):
         prob += lpSum(park_vars[i] for i in coverage_dict if j in coverage_dict[i]) >= 1, f"Point_{j}"
     
     prob.solve(PULP_CBC_CMD(msg=0, timeLimit=120, threads=4))
-    
-    # Check halt
-    if st.session_state.optimization_halted:
-        return []
     
     selected_parks = [candidate_parks[i] for i in coverage_dict.keys() 
                      if park_vars[i].varValue == 1]
@@ -568,10 +539,6 @@ def find_minimum_parks_optimal(boundary_poly, min_area_ha=0.5, max_area_ha=2.0):
             status_text, progress_bar
         )
     
-    # Check halt before finishing
-    if st.session_state.optimization_halted:
-        return []
-    
     progress_bar.progress(100)
     status_text.success("✨ Optimization complete!")
     
@@ -591,7 +558,6 @@ def refine_park_positions_full(parks, boundary_poly, service_distance_m,
     2. Optimizes individual park positions to reduce overlaps
     3. Fine-tunes positions for better coverage
     Iterations based on user-selected refinement intensity and boundary area.
-    Supports halt signal.
     """
     if len(parks) <= 1:
         return parks
@@ -603,18 +569,18 @@ def refine_park_positions_full(parks, boundary_poly, service_distance_m,
     boundary_area_ha = boundary_area_m2 / 10000
     refinement_intensity = st.session_state.refinement_intensity
     
-    # Base iterations: 0=1, 1=2, 2=3, 3=4, 4=5, 5=6
-    base_iterations = refinement_intensity + 1
+    # Base iterations: 0=0, 1=1, 2=2, 3=3, 4=4, 5=5
+    base_iterations = refinement_intensity
     
     # Scale down for very large areas (>2000 ha)
     if boundary_area_ha > 2000:
         max_iterations = max(1, base_iterations // 2)
     # Scale down for large areas (>1000 ha)
     elif boundary_area_ha > 1000:
-        max_iterations = max(2, int(base_iterations * 0.7))
+        max_iterations = max(1, int(base_iterations * 0.7))
     # Scale down for medium areas (>500 ha)
     elif boundary_area_ha > 500:
-        max_iterations = max(2, int(base_iterations * 0.85))
+        max_iterations = max(1, int(base_iterations * 0.85))
     # Full refinement for smaller areas
     else:
         max_iterations = base_iterations
@@ -624,23 +590,16 @@ def refine_park_positions_full(parks, boundary_poly, service_distance_m,
     improvements_made = True
     
     while improvements_made and iteration < max_iterations:
-        # Check halt each iteration
-        if st.session_state.optimization_halted:
-            status_text.warning("⏹️ Refinement halted by user")
-            return refined_parks
-        
         improvements_made = False
         iteration += 1
         
         status_text.info(f"🔍 Refinement iteration {iteration}/{max_iterations}...")
-        progress_bar.progress(60 + (iteration * 10))
+        progress_value = min(90, 60 + (iteration * 5))  # Cap at 90
+        progress_bar.progress(progress_value)
         
         # STEP 1: Try to merge nearby park pairs
         for i in range(len(refined_parks)):
             for j in range(i + 1, len(refined_parks)):
-                if st.session_state.optimization_halted:
-                    return refined_parks
-                
                 park_i = refined_parks[i]
                 park_j = refined_parks[j]
                 
@@ -657,9 +616,6 @@ def refine_park_positions_full(parks, boundary_poly, service_distance_m,
                 search_radius = service_distance_deg * 0.8
                 for angle in np.linspace(0, 2 * np.pi, 12, endpoint=False):
                     for radius in np.linspace(0, search_radius, 4):
-                        if st.session_state.optimization_halted:
-                            return refined_parks
-                        
                         test_x = mid_x + radius * np.cos(angle)
                         test_y = mid_y + radius * np.sin(angle)
                         
@@ -701,9 +657,6 @@ def refine_park_positions_full(parks, boundary_poly, service_distance_m,
         # STEP 2: Optimize park positions to reduce overlaps
         if not improvements_made:
             for i in range(len(refined_parks)):
-                if st.session_state.optimization_halted:
-                    return refined_parks
-                
                 park = refined_parks[i]
                 
                 current_buffer = create_buffer_projected(park, service_distance_m)
@@ -720,9 +673,6 @@ def refine_park_positions_full(parks, boundary_poly, service_distance_m,
                 
                 for angle in np.linspace(0, 2 * np.pi, 16, endpoint=False):
                     for radius in [search_radius * 0.3, search_radius * 0.6, search_radius]:
-                        if st.session_state.optimization_halted:
-                            return refined_parks
-                        
                         test_x = current_x + radius * np.cos(angle)
                         test_y = current_y + radius * np.sin(angle)
                         
@@ -775,9 +725,6 @@ def refine_park_positions_full(parks, boundary_poly, service_distance_m,
         # STEP 3: Fine-tune positions for better coverage
         if not improvements_made:
             for i in range(len(refined_parks)):
-                if st.session_state.optimization_halted:
-                    return refined_parks
-                
                 park = refined_parks[i]
                 
                 best_adjustment = None
@@ -791,9 +738,6 @@ def refine_park_positions_full(parks, boundary_poly, service_distance_m,
                 
                 for angle in np.linspace(0, 2 * np.pi, 12, endpoint=False):
                     for radius in [adjustment_radius * 0.5, adjustment_radius]:
-                        if st.session_state.optimization_halted:
-                            return refined_parks
-                        
                         test_x = current_x + radius * np.cos(angle)
                         test_y = current_y + radius * np.sin(angle)
                         
@@ -949,7 +893,7 @@ with st.sidebar:
             st.caption(f"🎯 Service area: {service_dist:.0f}m radius")
             st.divider()
             
-            # NEW: Refinement Intensity Slider
+            # Refinement Intensity Slider
             st.session_state.refinement_intensity = st.slider(
                 "Refinement Intensity (Higher = More Detail)",
                 min_value=0,
@@ -960,12 +904,12 @@ with st.sidebar:
             )
             
             refinement_labels = {
-                0: "⚡ Minimal (1 pass)",
-                1: "🔧 Light (2 passes)",
-                2: "⚙️ Medium (3 passes)",
-                3: "🔨 Standard (4 passes)",
-                4: "🏗️ Heavy (5 passes)",
-                5: "🎯 Maximum (6 passes)"
+                0: "⚡ None (0 passes)",
+                1: "🔧 Light (1 pass)",
+                2: "⚙️ Medium (2 passes)",
+                3: "🔨 Standard (3 passes)",
+                4: "🏗️ Heavy (4 passes)",
+                5: "🎯 Maximum (5 passes)"
             }
             st.caption(refinement_labels[st.session_state.refinement_intensity])
             st.caption("⏱️ Auto-scales based on area size:")
@@ -983,34 +927,21 @@ with st.sidebar:
                     min_park_size = target_park_size * 0.9
                     max_park_size = target_park_size * 1.1
                     
-                    st.session_state.optimization_halted = False
-                    
                     with st.spinner("🔄 Finding optimal park locations (ILP + Refinement)..."):
                         try:
                             parks = find_minimum_parks_optimal(boundary, min_park_size, max_park_size)
                             
-                            if parks and not st.session_state.optimization_halted:
+                            if parks:
                                 st.session_state.parks = parks
                                 st.session_state.park_buffers = create_park_buffers(parks, target_park_size)
                                 st.session_state.optimization_run = True
                                 st.rerun()
-                            elif st.session_state.optimization_halted:
-                                st.warning("⏹️ Optimization halted by user")
-                                st.session_state.optimization_halted = False
                             else:
                                 st.error("No parks generated. Try adjusting park size.")
                                 st.session_state.optimization_run = False
                         except Exception as e:
-                            if not st.session_state.optimization_halted:
-                                st.error(f"❌ Optimization failed: {str(e)}")
+                            st.error(f"❌ Optimization failed: {str(e)}")
                             st.session_state.optimization_run = False
-            
-            # HALT BUTTON
-            if st.button("⏹️ Halt Algorithm", use_container_width=True, type="primary"):
-                st.session_state.optimization_halted = True
-                st.session_state.optimization_run = False
-                st.warning("⏹️ Optimization halted by user")
-                st.rerun()
         
         st.divider()
         
@@ -1028,7 +959,6 @@ with st.sidebar:
                 st.session_state.park_buffers = []
                 st.session_state.algorithm_steps = []
                 st.session_state.current_step = -1
-                st.session_state.optimization_halted = False
                 st.rerun()
         
         st.divider()
@@ -1111,7 +1041,6 @@ with st.sidebar:
             st.session_state.current_step = -1
             st.session_state.optimization_run = False
             st.session_state.cached_boundary_area_m2 = None
-            st.session_state.optimization_halted = False
             st.rerun()
     else:
         st.info("👉 Draw a polygon on the map to start optimization.")
