@@ -171,8 +171,13 @@ def load_boundary_polygon(features):
     for feature in features:
         # Only process boundary-type features (or features without feature_type for backward compatibility)
         feature_type = feature.get('properties', {}).get('feature_type')
+        legacy_type = feature.get('properties', {}).get('type')  # parks/buffers use "type" not "feature_type"
+        
+        # Skip if this is explicitly a non-boundary feature
         if feature_type and feature_type != 'boundary':
-            continue  # Skip non-boundary features (parks, buffers, etc.)
+            continue  # Skip features with feature_type != boundary
+        if legacy_type in ['park', 'park_buffer']:
+            continue  # Skip parks and buffers
             
         if feature['geometry']['type'] == 'Polygon':
             coords = feature['geometry']['coordinates'][0]
@@ -999,8 +1004,9 @@ with st.sidebar:
             # Count only boundary-type features (exclude any parks/buffers that might be in the list)
             boundary_count = sum(
                 1 for f in st.session_state.geojson_features 
-                if f.get('properties', {}).get('feature_type') == 'boundary' 
-                or 'feature_type' not in f.get('properties', {})  # backward compatibility
+                if (f.get('properties', {}).get('feature_type') == 'boundary' 
+                    or 'feature_type' not in f.get('properties', {}))  # backward compatibility
+                and f.get('properties', {}).get('type') not in ['park', 'park_buffer']  # exclude parks/buffers
             )
             st.info(f"📍 Boundary polygons: {boundary_count}")
             
