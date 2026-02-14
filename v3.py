@@ -204,19 +204,12 @@ def create_park_at_location(centroid, target_area_m2, boundary_poly, lon_per_m, 
     return park_latlon if actual_area_m2 >= 3000 else None
 
 # ============================================================================
-# OPTIMIZED ILP SOLVER (FINER GRID)
+# OPTIMIZED ILP SOLVER
 # ============================================================================
 
 def find_minimum_parks_optimal(boundary_poly, min_area_ha=0.5, max_area_ha=2.0):
     """
-    Find optimal parks using ILP with FINER GRID to close gaps.
-    Optimizations:
-    - Finer grid (/3.5 instead of /4) for better coverage
-    - Fine demand grid for full accuracy
-    - Pre-filtered coverage matrix (only useful constraints)
-    - Parallel solving with 4 threads
-    - Minimal refinement (skip fine-tuning)
-    - LRU caching for repeated calculations
+    Find optimal parks using ILP with finer grid.
     """
     try:
         from pulp import LpMinimize, LpProblem, LpVariable, lpSum, LpBinary, PULP_CBC_CMD
@@ -241,7 +234,7 @@ def find_minimum_parks_optimal(boundary_poly, min_area_ha=0.5, max_area_ha=2.0):
     target_area_m2 = avg_park_size * 10000
     boundary_area_m2 = get_boundary_area_m2(boundary_poly)
     
-    # FINER GRID (/3.5 instead of /4 for tighter spacing)
+    # Finer grid spacing
     grid_spacing_m = service_distance_m / 3.5
     minx, miny, maxx, maxy = boundary_poly.bounds
     width_m = (maxx - minx) * lon_per_m
@@ -251,7 +244,7 @@ def find_minimum_parks_optimal(boundary_poly, min_area_ha=0.5, max_area_ha=2.0):
     grid_points_y = max(5, min(50, int(np.ceil(height_m / grid_spacing_m))))
     
     total_grid_points = grid_points_x * grid_points_y
-    st.info(f"📐 Grid: {grid_points_x}×{grid_points_y} = {total_grid_points} positions (finer grid to close gaps)")
+    st.info(f"📐 Grid: {grid_points_x}×{grid_points_y} = {total_grid_points} positions")
     
     x_coords = np.linspace(minx, maxx, grid_points_x)
     y_coords = np.linspace(miny, maxy, grid_points_y)
@@ -272,10 +265,8 @@ def find_minimum_parks_optimal(boundary_poly, min_area_ha=0.5, max_area_ha=2.0):
     
     st.info(f"✅ Created {len(candidate_parks)} candidates")
     
-    # STEP 2: FINE DEMAND GRID FOR ACCURACY
+    # STEP 2: Fine demand grid
     st.info("📍 Creating demand points...")
-    
-    # Adaptive grid size like original
     demand_grid_size = max(20, min(50, int(np.sqrt(boundary_area_m2 / 10000))))
     demand_points = []
     
@@ -289,7 +280,7 @@ def find_minimum_parks_optimal(boundary_poly, min_area_ha=0.5, max_area_ha=2.0):
     
     st.info(f"✅ Created {len(demand_points)} demand points")
     
-    # STEP 3: OPTIMIZED coverage matrix (pre-filtered)
+    # STEP 3: Coverage matrix
     st.info("🔍 Computing coverage relationships...")
     coverage_dict = {}
     
@@ -297,28 +288,23 @@ def find_minimum_parks_optimal(boundary_poly, min_area_ha=0.5, max_area_ha=2.0):
         park_buffer = create_buffer_projected(park, service_distance_m)
         covered_points = [i for i, p in enumerate(demand_points) if park_buffer.contains(p)]
         
-        # Only store if this park covers at least one point
         if covered_points:
             coverage_dict[park_idx] = covered_points
     
-    st.info(f"✅ Coverage matrix: {len(coverage_dict)} active parks × {len(demand_points)} demand points")
+    st.info(f"✅ Coverage matrix ready")
     
     if not coverage_dict:
         st.error("No parks can cover any demand points!")
         return []
     
-    # STEP 4: Formulate and solve ILP
-    st.info("🧮 Solving optimization problem (ILP)...")
+    # STEP 4: Solve ILP
+    st.info("🧮 Solving optimization problem...")
     
     prob = LpProblem("MinimumParkCoverage", LpMinimize)
-    
-    # Only create variables for parks that cover something
     park_vars = {i: LpVariable(f"park_{i}", cat=LpBinary) for i in coverage_dict.keys()}
     
-    # Objective: minimize total parks
     prob += lpSum(park_vars.values()), "TotalParks"
     
-    # Constraints: every demand point must be covered
     covered_points = set()
     for covered in coverage_dict.values():
         covered_points.update(covered)
@@ -326,13 +312,12 @@ def find_minimum_parks_optimal(boundary_poly, min_area_ha=0.5, max_area_ha=2.0):
     for j in covered_points:
         prob += lpSum(park_vars[i] for i in coverage_dict if j in coverage_dict[i]) >= 1, f"Point_{j}"
     
-    # Solve with parallel threads and reasonable timeout
     prob.solve(PULP_CBC_CMD(msg=0, timeLimit=120, threads=4))
     
     selected_parks = [candidate_parks[i] for i in coverage_dict.keys() 
                      if park_vars[i].varValue == 1]
     
-    st.success(f"🎯 Optimal solution found: {len(selected_parks)} parks (provably minimal!)")
+    st.success(f"🎯 Optimal solution found: {len(selected_parks)} parks")
     
     optimal_coverage = calculate_coverage_percentage_fast(
         selected_parks, boundary_poly, service_distance_m, boundary_area_m2
@@ -345,9 +330,9 @@ def find_minimum_parks_optimal(boundary_poly, min_area_ha=0.5, max_area_ha=2.0):
         'description': f'Optimal (ILP): {len(selected_parks)} parks, {optimal_coverage:.1f}% coverage',
     })
     
-    # Refine only if multiple parks exist
+    # FULL REFINEMENT to remove redundant parks
     if len(selected_parks) > 1:
-        selected_parks = refine_park_positions_minimal(
+        selected_parks = refine_park_positions_full(
             selected_parks, boundary_poly, service_distance_m, 
             target_area_m2, lon_per_m, lat_per_m, boundary_area_m2
         )
@@ -355,76 +340,146 @@ def find_minimum_parks_optimal(boundary_poly, min_area_ha=0.5, max_area_ha=2.0):
     return selected_parks
 
 # ============================================================================
-# MINIMAL REFINEMENT
+# FULL REFINEMENT (removes redundant parks)
 # ============================================================================
 
-def refine_park_positions_minimal(parks, boundary_poly, service_distance_m, 
-                                  target_area_m2, lon_per_m, lat_per_m, 
-                                  boundary_area_m2, min_coverage=99.0):
+def refine_park_positions_full(parks, boundary_poly, service_distance_m, 
+                               target_area_m2, lon_per_m, lat_per_m, 
+                               boundary_area_m2, min_coverage=99.0):
     """
-    Minimal refinement: only merge parks that are very close.
-    Skip fine-tuning (only marginal benefit, adds time).
+    Full refinement that removes redundant parks and optimizes positions.
+    - Merge nearby redundant parks
+    - Fine-tune park positions for better coverage
+    - Records all optimization steps
     """
     if len(parks) <= 1:
         return parks
     
-    st.info("🔧 Checking for obvious park merges...")
+    st.info("🔧 Refining park positions and removing redundancies...")
     ref_lat = boundary_poly.centroid.y
     service_distance_deg = meters_to_degrees(service_distance_m, ref_lat)
     
     refined_parks = parks.copy()
-    improvement_found = True
     iteration = 0
-    max_iterations = 2
+    max_iterations = 5
+    improvements_made = True
     
-    while improvement_found and iteration < max_iterations:
-        improvement_found = False
+    while improvements_made and iteration < max_iterations:
+        improvements_made = False
         iteration += 1
         
-        # Only merge parks very close to each other
+        st.info(f"🔍 Refinement iteration {iteration}/{max_iterations}...")
+        
+        # STEP 1: Try to merge nearby park pairs (redundancy removal)
         for i in range(len(refined_parks)):
             for j in range(i + 1, len(refined_parks)):
-                dist = refined_parks[i].centroid.distance(refined_parks[j].centroid)
+                park_i = refined_parks[i]
+                park_j = refined_parks[j]
                 
-                # Only consider parks within 1x service distance
-                if dist > service_distance_deg:
+                distance = park_i.centroid.distance(park_j.centroid)
+                if distance > service_distance_deg * 2:
                     continue
                 
-                # Try merging at midpoint
-                mid_x = (refined_parks[i].centroid.x + refined_parks[j].centroid.x) / 2
-                mid_y = (refined_parks[i].centroid.y + refined_parks[j].centroid.y) / 2
+                # Try to find a single position that covers both areas
+                mid_x = (park_i.centroid.x + park_j.centroid.x) / 2
+                mid_y = (park_i.centroid.y + park_j.centroid.y) / 2
                 
-                merge_park = create_park_at_location(
-                    [mid_x, mid_y], target_area_m2, boundary_poly, lon_per_m, lat_per_m
-                )
+                best_merge_position = None
+                best_merge_coverage = 0
                 
-                if merge_park is None:
-                    continue
+                search_radius = service_distance_deg * 0.8
+                for angle in np.linspace(0, 2 * np.pi, 12, endpoint=False):
+                    for radius in np.linspace(0, search_radius, 4):
+                        test_x = mid_x + radius * np.cos(angle)
+                        test_y = mid_y + radius * np.sin(angle)
+                        
+                        test_park = create_park_at_location([test_x, test_y], target_area_m2, boundary_poly, lon_per_m, lat_per_m)
+                        if test_park is None:
+                            continue
+                        
+                        test_parks = [p for idx, p in enumerate(refined_parks) if idx != i and idx != j] + [test_park]
+                        
+                        test_coverage = calculate_coverage_percentage_fast(
+                            test_parks, boundary_poly, service_distance_m, boundary_area_m2
+                        )
+                        
+                        if test_coverage >= min_coverage and test_coverage > best_merge_coverage:
+                            best_merge_coverage = test_coverage
+                            best_merge_position = test_park
                 
-                # Test if merge maintains coverage
-                test_parks = [refined_parks[k] for k in range(len(refined_parks)) 
-                             if k != i and k != j] + [merge_park]
-                
-                test_coverage = calculate_coverage_percentage_fast(
-                    test_parks, boundary_poly, service_distance_m, boundary_area_m2
-                )
-                
-                if test_coverage >= min_coverage:
-                    st.success(f"✅ Merged 2 parks → 1 at better position")
-                    refined_parks = [refined_parks[k] for k in range(len(refined_parks)) 
-                                   if k != i and k != j] + [merge_park]
-                    improvement_found = True
+                if best_merge_position is not None:
+                    st.success(f"✅ Merged 2 parks into 1")
+                    refined_parks = [p for idx, p in enumerate(refined_parks) if idx != i and idx != j] + [best_merge_position]
+                    improvements_made = True
+                    
+                    new_coverage = calculate_coverage_percentage_fast(refined_parks, boundary_poly, service_distance_m, boundary_area_m2)
+                    st.session_state.algorithm_steps.append({
+                        'type': 'refinement',
+                        'parks': refined_parks.copy(),
+                        'coverage': new_coverage,
+                        'description': f'Refinement: Merged 2 parks → 1 park',
+                        'iteration': iteration
+                    })
+                    
                     break
             
-            if improvement_found:
+            if improvements_made:
                 break
+        
+        # STEP 2: Fine-tune individual park positions
+        if not improvements_made:
+            for i in range(len(refined_parks)):
+                park = refined_parks[i]
+                
+                best_adjustment = None
+                best_adjustment_coverage = 0
+                
+                current_x = park.centroid.x
+                current_y = park.centroid.y
+                
+                adjustment_radius = service_distance_deg * 0.2
+                
+                for angle in np.linspace(0, 2 * np.pi, 16, endpoint=False):
+                    for radius in [adjustment_radius * 0.5, adjustment_radius]:
+                        test_x = current_x + radius * np.cos(angle)
+                        test_y = current_y + radius * np.sin(angle)
+                        
+                        test_park = create_park_at_location([test_x, test_y], target_area_m2, boundary_poly, lon_per_m, lat_per_m)
+                        if test_park is None:
+                            continue
+                        
+                        test_parks = [p if idx != i else test_park for idx, p in enumerate(refined_parks)]
+                        
+                        test_coverage = calculate_coverage_percentage_fast(
+                            test_parks, boundary_poly, service_distance_m, boundary_area_m2
+                        )
+                        
+                        if test_coverage > best_adjustment_coverage:
+                            best_adjustment_coverage = test_coverage
+                            best_adjustment = test_park
+                
+                if best_adjustment is not None:
+                    current_buffers = [create_buffer_projected(p, service_distance_m) for p in refined_parks]
+                    current_coverage_pct = 100 * unary_union(current_buffers).intersection(boundary_poly).area / boundary_area_m2
+                    
+                    if best_adjustment_coverage > current_coverage_pct + 0.1:
+                        refined_parks[i] = best_adjustment
+                        improvements_made = True
+                        st.info(f"📍 Fine-tuned park {i+1} position")
     
     final_coverage = calculate_coverage_percentage_fast(
         refined_parks, boundary_poly, service_distance_m, boundary_area_m2
     )
     
-    if len(refined_parks) < len(parks):
-        st.success(f"✨ Refinement: {len(parks)} → {len(refined_parks)} parks, {final_coverage:.1f}% coverage")
+    if iteration > 1 or len(refined_parks) < len(parks):
+        st.success(f"✨ Refinement complete: {len(parks)} → {len(refined_parks)} parks, {final_coverage:.1f}% coverage")
+        st.session_state.algorithm_steps.append({
+            'type': 'final',
+            'parks': refined_parks.copy(),
+            'coverage': final_coverage,
+            'description': f'Final (refined): {len(refined_parks)} parks, {final_coverage:.1f}% coverage',
+            'total_removed': len(parks) - len(refined_parks)
+        })
     else:
         st.info(f"✓ {len(refined_parks)} parks, {final_coverage:.1f}% coverage (already optimal)")
     
@@ -635,6 +690,8 @@ with st.sidebar:
                     current_step_data = st.session_state.algorithm_steps[st.session_state.current_step]
                     step_num = st.session_state.current_step + 1
                     st.info(f"📍 Step {step_num}/{total_steps}: **{current_step_data['description']}**")
+                    if 'coverage' in current_step_data:
+                        st.metric("Coverage at this step", f"{current_step_data['coverage']:.1f}%")
         
         geojson_data = {"type": "FeatureCollection", "features": st.session_state.geojson_features}
         st.download_button(
