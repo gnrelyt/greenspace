@@ -1193,17 +1193,6 @@ else:
         
 st.divider()
 
-with st.expander("📋 Map Legend"):
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        st.markdown("🔵 **Boundary** - Project area")
-    with col2:
-        st.markdown(f"🟢 **Parks** - {st.session_state.park_size_ha:.1f} ha")
-    with col3:
-        if st.session_state.park_size_ha:
-            service_dist = calculate_service_distance(st.session_state.park_size_ha)
-            st.markdown(f"🟡 **Buffers** - {service_dist:.0f}m service area")
-
 st.markdown("""
 <div style='text-align: center; color: #666; font-size: 12px; margin-top: 20px;'>
     <p>🗺️ Green Mapping Tool | Optimal Park Placement with ILP + Continuous Refinement</p>
