@@ -962,7 +962,7 @@ with st.sidebar:
                                 st.session_state.optimization_run = False
             
             with col2:
-                if st.button("⏹️ Halt", use_container_width=True, type="secondary"):
+                if st.button("⏹️ Halt", use_container_width=True, type="primary"):
                     st.session_state.optimization_halted = True
                     st.rerun()
         else:
