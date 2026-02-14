@@ -44,6 +44,8 @@ if "cached_boundary_area_m2" not in st.session_state:
     st.session_state.cached_boundary_area_m2 = None
 if "optimization_halted" not in st.session_state:
     st.session_state.optimization_halted = False
+if "refinement_intensity" not in st.session_state:
+    st.session_state.refinement_intensity = 3
 
 # ============================================================================
 # CACHED TRANSFORMERS & UTILITIES
@@ -588,7 +590,7 @@ def refine_park_positions_full(parks, boundary_poly, service_distance_m,
     1. Removes redundant parks (merging)
     2. Optimizes individual park positions to reduce overlaps
     3. Fine-tunes positions for better coverage
-    3 iterations maximum.
+    Iterations based on user-selected refinement intensity and boundary area.
     Supports halt signal.
     """
     if len(parks) <= 1:
@@ -597,9 +599,28 @@ def refine_park_positions_full(parks, boundary_poly, service_distance_m,
     ref_lat = boundary_poly.centroid.y
     service_distance_deg = meters_to_degrees(service_distance_m, ref_lat)
     
+    # Dynamic iteration count based on refinement intensity and boundary area (in hectares)
+    boundary_area_ha = boundary_area_m2 / 10000
+    refinement_intensity = st.session_state.refinement_intensity
+    
+    # Base iterations: 0=1, 1=2, 2=3, 3=4, 4=5, 5=6
+    base_iterations = refinement_intensity + 1
+    
+    # Scale down for very large areas (>2000 ha)
+    if boundary_area_ha > 2000:
+        max_iterations = max(1, base_iterations // 2)
+    # Scale down for large areas (>1000 ha)
+    elif boundary_area_ha > 1000:
+        max_iterations = max(2, int(base_iterations * 0.7))
+    # Scale down for medium areas (>500 ha)
+    elif boundary_area_ha > 500:
+        max_iterations = max(2, int(base_iterations * 0.85))
+    # Full refinement for smaller areas
+    else:
+        max_iterations = base_iterations
+    
     refined_parks = parks.copy()
     iteration = 0
-    max_iterations = 3
     improvements_made = True
     
     while improvements_made and iteration < max_iterations:
@@ -927,6 +948,31 @@ with st.sidebar:
             st.caption(f"≈ {park_side_m:.0f}m × {park_side_m:.0f}m square")
             st.caption(f"🎯 Service area: {service_dist:.0f}m radius")
             st.divider()
+            
+            # NEW: Refinement Intensity Slider
+            st.session_state.refinement_intensity = st.slider(
+                "Refinement Intensity (Higher = More Detail)",
+                min_value=0,
+                max_value=5,
+                value=st.session_state.refinement_intensity,
+                step=1,
+                key="refinement_slider"
+            )
+            
+            refinement_labels = {
+                0: "⚡ Minimal (1 pass)",
+                1: "🔧 Light (2 passes)",
+                2: "⚙️ Medium (3 passes)",
+                3: "🔨 Standard (4 passes)",
+                4: "🏗️ Heavy (5 passes)",
+                5: "🎯 Maximum (6 passes)"
+            }
+            st.caption(refinement_labels[st.session_state.refinement_intensity])
+            st.caption("⏱️ Auto-scales based on area size:")
+            st.caption("  >2000 ha: 50% passes")
+            st.caption("  >1000 ha: 70% passes")
+            st.caption("  >500 ha: 85% passes")
+            st.divider()
         
         if not st.session_state.optimization_run:
             st.info("📝 Adjust park size, then click to find optimal solution")
@@ -959,7 +1005,7 @@ with st.sidebar:
                                 st.error(f"❌ Optimization failed: {str(e)}")
                             st.session_state.optimization_run = False
             
-            # HALT BUTTON - Inside the conditional
+            # HALT BUTTON
             if st.button("⏹️ Halt Algorithm", use_container_width=True, type="primary"):
                 st.session_state.optimization_halted = True
                 st.session_state.optimization_run = False
