@@ -6,3 +6,4 @@ geopandas
 numpy
 scipy
 pulp
+pyproj
