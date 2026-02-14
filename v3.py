@@ -957,35 +957,6 @@ with st.sidebar:
                         except Exception as e:
                             if not st.session_state.optimization_halted:
                                 st.error(f"❌ Optimization failed: {str(e)}")
-                            if not st.session_state.optimization_run:
-            st.info("📝 Adjust park size, then click to find optimal solution")
-            
-            if st.button("🚀 Find Optimal Parks", use_container_width=True, type="primary"):
-                if boundary is not None:
-                    target_park_size = st.session_state.park_size_ha
-                    min_park_size = target_park_size * 0.9
-                    max_park_size = target_park_size * 1.1
-                    
-                    st.session_state.optimization_halted = False
-                    
-                    with st.spinner("🔄 Finding optimal park locations (ILP + Refinement)..."):
-                        try:
-                            parks = find_minimum_parks_optimal(boundary, min_park_size, max_park_size)
-                            
-                            if parks and not st.session_state.optimization_halted:
-                                st.session_state.parks = parks
-                                st.session_state.park_buffers = create_park_buffers(parks, target_park_size)
-                                st.session_state.optimization_run = True
-                                st.rerun()
-                            elif st.session_state.optimization_halted:
-                                st.warning("⏹️ Optimization halted by user")
-                                st.session_state.optimization_halted = False
-                            else:
-                                st.error("No parks generated. Try adjusting park size.")
-                                st.session_state.optimization_run = False
-                        except Exception as e:
-                            if not st.session_state.optimization_halted:
-                                st.error(f"❌ Optimization failed: {str(e)}")
                             st.session_state.optimization_run = False
             
             # HALT BUTTON - Inside the conditional
@@ -996,6 +967,7 @@ with st.sidebar:
                 st.rerun()
         
         st.divider()
+        
         if st.session_state.optimization_run:
             if st.session_state.parks and len(st.session_state.parks) > 0:
                 st.success(f"✅ Optimization complete - Provably minimal solution!")
