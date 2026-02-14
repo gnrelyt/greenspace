@@ -402,7 +402,9 @@ def find_minimum_parks_optimal(boundary_poly, min_area_ha=0.5, max_area_ha=2.0, 
     try:
         from pulp import LpMinimize, LpProblem, LpVariable, lpSum, LpBinary, PULP_CBC_CMD
     except ImportError:
-        st.error("PuLP library not installed. Install with: pip install pulp --break-system-packages")
+        st.error("❌ PuLP library not found!")
+        st.error("Add 'pulp' to your requirements.txt file for Streamlit Cloud deployment.")
+        st.info("For local install: pip install pulp --break-system-packages")
         return []
     
     if boundary_poly is None:
@@ -1135,18 +1137,37 @@ with st.sidebar:
                     min_park_size = target_park_size * 0.9
                     max_park_size = target_park_size * 1.1
                     
-                    with st.spinner("🔄 Finding optimal park locations (ILP + Refinement)..."):
-                        parks = find_minimum_parks_optimal(boundary, min_park_size, max_park_size)
-                        st.session_state.parks = parks
-                        
-                        park_buffers = create_park_buffers(parks, target_park_size)
-                        st.session_state.park_buffers = park_buffers
-                        st.session_state.optimization_run = True
+                    # Debug info
+                    st.info(f"Starting optimization with park size: {target_park_size} ha")
                     
-                    st.rerun()
+                    with st.spinner("🔄 Finding optimal park locations (ILP + Refinement)..."):
+                        try:
+                            parks = find_minimum_parks_optimal(boundary, min_park_size, max_park_size)
+                            
+                            if parks:
+                                st.info(f"✓ Created {len(parks)} parks")
+                                st.session_state.parks = parks
+                                
+                                park_buffers = create_park_buffers(parks, target_park_size)
+                                st.session_state.park_buffers = park_buffers
+                                st.session_state.optimization_run = True
+                            else:
+                                st.error("No parks were generated. Check if park size is appropriate for boundary.")
+                                st.session_state.optimization_run = False
+                        except Exception as e:
+                            st.error(f"❌ Optimization failed: {str(e)}")
+                            st.error("Please report this error with your boundary details.")
+                            st.session_state.optimization_run = False
+                    
+                    # Don't call st.rerun() - let Streamlit handle it naturally
         else:
-            st.success(f"✅ Optimization complete - Provably minimal solution!")
-            st.info(f"🏞️ Park size: {st.session_state.park_size_ha} ha")
+            # Only show success if parks actually exist
+            if st.session_state.parks and len(st.session_state.parks) > 0:
+                st.success(f"✅ Optimization complete - Provably minimal solution!")
+                st.info(f"🏞️ Park size: {st.session_state.park_size_ha} ha")
+            else:
+                st.warning("⚠️ No parks generated. Try adjusting park size or redrawing boundary.")
+                st.session_state.optimization_run = False
             
             if st.button("📏 Try Different Park Size", use_container_width=True):
                 st.session_state.optimization_run = False
