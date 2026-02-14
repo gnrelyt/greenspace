@@ -209,30 +209,48 @@ def create_park_at_location(centroid, target_area_m2, boundary_poly, lon_per_m, 
 
 def build_live_map(boundary_poly, candidate_parks=None, selected_parks=None, 
                    demand_points=None, service_distance_m=None, bounds=None):
-    """Build a folium map with current algorithm state (no st.empty!)."""
+    """Build a folium map with current algorithm state (handles MultiPolygon)."""
     m = folium.Map(
         location=[54.5973, -3.4360],
         zoom_start=6,
         tiles="OpenStreetMap"
     )
     
-    # Draw boundary
+    # Draw boundary (handle both Polygon and MultiPolygon)
     if boundary_poly is not None:
-        folium.GeoJson(
-            data={
-                "type": "Feature",
-                "geometry": {
-                    "type": "Polygon",
-                    "coordinates": [list(boundary_poly.exterior.coords)]
+        if boundary_poly.geom_type == 'Polygon':
+            folium.GeoJson(
+                data={
+                    "type": "Feature",
+                    "geometry": {
+                        "type": "Polygon",
+                        "coordinates": [list(boundary_poly.exterior.coords)]
+                    }
+                },
+                style_function=lambda x: {
+                    'color': '#007bff',
+                    'weight': 2,
+                    'opacity': 0.8,
+                    'fillOpacity': 0.2
                 }
-            },
-            style_function=lambda x: {
-                'color': '#007bff',
-                'weight': 2,
-                'opacity': 0.8,
-                'fillOpacity': 0.2
-            }
-        ).add_to(m)
+            ).add_to(m)
+        elif boundary_poly.geom_type == 'MultiPolygon':
+            for poly in boundary_poly.geoms:
+                folium.GeoJson(
+                    data={
+                        "type": "Feature",
+                        "geometry": {
+                            "type": "Polygon",
+                            "coordinates": [list(poly.exterior.coords)]
+                        }
+                    },
+                    style_function=lambda x: {
+                        'color': '#007bff',
+                        'weight': 2,
+                        'opacity': 0.8,
+                        'fillOpacity': 0.2
+                    }
+                ).add_to(m)
     
     # Draw candidate parks as light gray
     if candidate_parks:
@@ -306,6 +324,23 @@ def build_live_map(boundary_poly, candidate_parks=None, selected_parks=None,
                             'fillOpacity': 0.05
                         }
                     ).add_to(m)
+                elif buffer.geom_type == 'MultiPolygon':
+                    for poly in buffer.geoms:
+                        folium.GeoJson(
+                            data={
+                                "type": "Feature",
+                                "geometry": {
+                                    "type": "Polygon",
+                                    "coordinates": [list(poly.exterior.coords)]
+                                }
+                            },
+                            style_function=lambda x: {
+                                'color': '#ffc107',
+                                'weight': 1,
+                                'opacity': 0.2,
+                                'fillOpacity': 0.05
+                            }
+                        ).add_to(m)
     
     # Fit bounds
     if bounds:
