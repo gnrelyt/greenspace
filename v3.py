@@ -44,6 +44,8 @@ if "cached_boundary_area_m2" not in st.session_state:
     st.session_state.cached_boundary_area_m2 = None
 if "refinement_intensity" not in st.session_state:
     st.session_state.refinement_intensity = 3
+if "optimization_id" not in st.session_state:
+    st.session_state.optimization_id = 0
 
 # ============================================================================
 # CACHED TRANSFORMERS & UTILITIES
@@ -960,6 +962,7 @@ with st.sidebar:
                                 st.session_state.parks = parks
                                 st.session_state.park_buffers = create_park_buffers(parks, target_park_size)
                                 st.session_state.optimization_run = True
+                                st.session_state.optimization_id += 1
                                 st.rerun()
                             else:
                                 st.error("No parks generated. Try adjusting park size.")
@@ -1259,7 +1262,7 @@ else:
                 bounds=bounds
             )
         
-        st_folium(m, width=1400, height=600)
+        st_folium(m, width=1400, height=600, key=f"map_{st.session_state.optimization_id}")
     else:
         st.warning("Could not load boundary for visualization")
 
