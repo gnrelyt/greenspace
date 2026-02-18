@@ -101,7 +101,8 @@ def get_boundary_area_m2(boundary_poly, use_cache=True):
                 return st.session_state.cached_boundary_area_m2
     
     gdf = gpd.GeoDataFrame([1], geometry=[boundary_poly], crs="EPSG:4326")
-    gdf_proj = gdf.to_crs("EPSG:3857")
+    # FIX: Use British National Grid instead of Web Mercator for accurate UK measurements
+    gdf_proj = gdf.to_crs("EPSG:27700")
     area_m2 = gdf_proj.geometry[0].area
     
     if use_cache:
@@ -128,7 +129,8 @@ def calculate_coverage_percentage_fast(parks, boundary_poly, service_distance_m,
         return 0.0
     
     gdf_covered = gpd.GeoDataFrame([1], geometry=[covered_area_geom], crs="EPSG:4326")
-    gdf_covered_proj = gdf_covered.to_crs("EPSG:3857")
+    # FIX: Use British National Grid instead of Web Mercator for accurate UK measurements
+    gdf_covered_proj = gdf_covered.to_crs("EPSG:27700")
     covered_area_m2 = gdf_covered_proj.geometry[0].area
     
     return 100 * covered_area_m2 / boundary_area_m2
@@ -140,7 +142,8 @@ def calculate_area_hectares(coords):
     
     poly = Polygon([(c[0], c[1]) for c in coords])
     gdf = gpd.GeoDataFrame([1], geometry=[poly], crs="EPSG:4326")
-    gdf_projected = gdf.to_crs("EPSG:3857")
+    # FIX: Use British National Grid instead of Web Mercator for accurate UK measurements
+    gdf_projected = gdf.to_crs("EPSG:27700")
     area_m2 = gdf_projected.geometry[0].area
     
     return area_m2 / 10000
@@ -227,7 +230,8 @@ def create_park_at_location(centroid, target_area_m2, boundary_poly, lon_per_m, 
         return None
     
     gdf = gpd.GeoDataFrame([1], geometry=[park_latlon], crs="EPSG:4326")
-    gdf_projected = gdf.to_crs("EPSG:3857")
+    # FIX: Use British National Grid instead of Web Mercator for accurate UK measurements
+    gdf_projected = gdf.to_crs("EPSG:27700")
     actual_area_m2 = gdf_projected.geometry[0].area
     
     return park_latlon if actual_area_m2 >= 3000 else None
@@ -826,7 +830,8 @@ def parks_to_geojson(parks):
         if park.geom_type == 'Polygon':
             coords = list(park.exterior.coords)
             gdf = gpd.GeoDataFrame([1], geometry=[park], crs="EPSG:4326")
-            gdf_proj = gdf.to_crs("EPSG:3857")
+            # FIX: Use British National Grid instead of Web Mercator for accurate UK measurements
+            gdf_proj = gdf.to_crs("EPSG:27700")
             area_ha = gdf_proj.geometry[0].area / 10000
             
             features.append({
@@ -999,7 +1004,7 @@ with st.sidebar:
             with col2:
                 total_park_area = sum(
                     gpd.GeoDataFrame([1], geometry=[p], crs="EPSG:4326")
-                    .to_crs("EPSG:3857").geometry[0].area / 10000 
+                    .to_crs("EPSG:27700").geometry[0].area / 10000 
                     for p in st.session_state.parks
                 )
                 st.metric("Parks (total ha)", f"{total_park_area:.2f}")
