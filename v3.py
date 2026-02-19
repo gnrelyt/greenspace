@@ -1143,8 +1143,37 @@ with st.sidebar:
 if not st.session_state.optimization_run:
     st.subheader("Interactive Map")
     
+    # Add search functionality
+    col1, col2 = st.columns([3, 1])
+    with col1:
+        search_query = st.text_input(
+            "🔍 Search location (postcode, city, or address)",
+            placeholder="e.g., CA1 1LL, Carlisle, London",
+            key="location_search"
+        )
+    with col2:
+        search_button = st.button("Search", use_container_width=True, type="primary")
+    
+    # Initialize map center
     initial_center = [54.5973, -3.4360]
     initial_zoom = 6
+    
+    # Handle search
+    if search_button and search_query:
+        try:
+            from geopy.geocoders import Nominatim
+            geolocator = Nominatim(user_agent="greenspace_mapper")
+            location = geolocator.geocode(search_query, timeout=10)
+            
+            if location:
+                initial_center = [location.latitude, location.longitude]
+                initial_zoom = 13
+                st.success(f"✅ Found: {location.address}")
+            else:
+                st.error("❌ Location not found. Try a different search term.")
+        except Exception as e:
+            st.error(f"❌ Search error: {str(e)}")
+    
     bounds = get_bounds_from_polygons(st.session_state.geojson_features)
     
     m = folium.Map(location=initial_center, zoom_start=initial_zoom, tiles="OpenStreetMap")
