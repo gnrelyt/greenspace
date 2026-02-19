@@ -7,3 +7,4 @@ numpy
 scipy
 pulp
 pyproj
+geopy
