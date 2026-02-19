@@ -63,6 +63,28 @@ def get_transformers():
         _transformer_to_latlon = Transformer.from_crs("EPSG:3857", "EPSG:4326", always_xy=True)
     return _transformer_to_meters, _transformer_to_latlon
 
+def get_appropriate_crs(boundary_poly):
+    """Get the appropriate UTM CRS for accurate area calculation based on location."""
+    # Get the centroid of the boundary
+    centroid = boundary_poly.centroid
+    lon, lat = centroid.x, centroid.y
+    
+    # For UK (including Carlisle), use British National Grid
+    # UK is roughly between -8 to 2 longitude and 49 to 61 latitude
+    if -8 <= lon <= 2 and 49 <= lat <= 61:
+        return "EPSG:27700"  # British National Grid
+    
+    # For other locations, calculate the appropriate UTM zone
+    utm_zone = int((lon + 180) / 6) + 1
+    
+    # Determine if it's northern or southern hemisphere
+    if lat >= 0:
+        epsg_code = f"EPSG:{32600 + utm_zone}"  # Northern hemisphere
+    else:
+        epsg_code = f"EPSG:{32700 + utm_zone}"  # Southern hemisphere
+    
+    return epsg_code
+
 @functools.lru_cache(maxsize=256)
 def calculate_service_distance(park_size_ha):
     """Calculate service distance based on park size. LRU cached."""
@@ -101,8 +123,9 @@ def get_boundary_area_m2(boundary_poly, use_cache=True):
                 return st.session_state.cached_boundary_area_m2
     
     gdf = gpd.GeoDataFrame([1], geometry=[boundary_poly], crs="EPSG:4326")
-    # FIX: Use British National Grid instead of Web Mercator for accurate UK measurements
-    gdf_proj = gdf.to_crs("EPSG:27700")
+    # Use appropriate CRS for accurate measurements
+    appropriate_crs = get_appropriate_crs(boundary_poly)
+    gdf_proj = gdf.to_crs(appropriate_crs)
     area_m2 = gdf_proj.geometry[0].area
     
     if use_cache:
@@ -129,8 +152,8 @@ def calculate_coverage_percentage_fast(parks, boundary_poly, service_distance_m,
         return 0.0
     
     gdf_covered = gpd.GeoDataFrame([1], geometry=[covered_area_geom], crs="EPSG:4326")
-    # FIX: Use British National Grid instead of Web Mercator for accurate UK measurements
-    gdf_covered_proj = gdf_covered.to_crs("EPSG:27700")
+    appropriate_crs = get_appropriate_crs(boundary_poly)
+    gdf_covered_proj = gdf_covered.to_crs(appropriate_crs)
     covered_area_m2 = gdf_covered_proj.geometry[0].area
     
     return 100 * covered_area_m2 / boundary_area_m2
@@ -142,8 +165,8 @@ def calculate_area_hectares(coords):
     
     poly = Polygon([(c[0], c[1]) for c in coords])
     gdf = gpd.GeoDataFrame([1], geometry=[poly], crs="EPSG:4326")
-    # FIX: Use British National Grid instead of Web Mercator for accurate UK measurements
-    gdf_projected = gdf.to_crs("EPSG:27700")
+    appropriate_crs = get_appropriate_crs(poly)
+    gdf_projected = gdf.to_crs(appropriate_crs)
     area_m2 = gdf_projected.geometry[0].area
     
     return area_m2 / 10000
@@ -230,8 +253,8 @@ def create_park_at_location(centroid, target_area_m2, boundary_poly, lon_per_m, 
         return None
     
     gdf = gpd.GeoDataFrame([1], geometry=[park_latlon], crs="EPSG:4326")
-    # FIX: Use British National Grid instead of Web Mercator for accurate UK measurements
-    gdf_projected = gdf.to_crs("EPSG:27700")
+    appropriate_crs = get_appropriate_crs(boundary_poly)
+    gdf_projected = gdf.to_crs(appropriate_crs)
     actual_area_m2 = gdf_projected.geometry[0].area
     
     return park_latlon if actual_area_m2 >= 3000 else None
@@ -830,8 +853,8 @@ def parks_to_geojson(parks):
         if park.geom_type == 'Polygon':
             coords = list(park.exterior.coords)
             gdf = gpd.GeoDataFrame([1], geometry=[park], crs="EPSG:4326")
-            # FIX: Use British National Grid instead of Web Mercator for accurate UK measurements
-            gdf_proj = gdf.to_crs("EPSG:27700")
+            appropriate_crs = get_appropriate_crs(park)
+            gdf_proj = gdf.to_crs(appropriate_crs)
             area_ha = gdf_proj.geometry[0].area / 10000
             
             features.append({
@@ -1004,7 +1027,7 @@ with st.sidebar:
             with col2:
                 total_park_area = sum(
                     gpd.GeoDataFrame([1], geometry=[p], crs="EPSG:4326")
-                    .to_crs("EPSG:27700").geometry[0].area / 10000 
+                    .to_crs(get_appropriate_crs(p)).geometry[0].area / 10000 
                     for p in st.session_state.parks
                 )
                 st.metric("Parks (total ha)", f"{total_park_area:.2f}")
