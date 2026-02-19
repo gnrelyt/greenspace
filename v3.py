@@ -1154,9 +1154,10 @@ if not st.session_state.optimization_run:
     with col2:
         search_button = st.button("Search", use_container_width=True, type="primary")
     
-    # Initialize map center
+    # Initialize map center and zoom
     initial_center = [54.5973, -3.4360]
     initial_zoom = 6
+    search_successful = False
     
     # Handle search
     if search_button and search_query:
@@ -1168,6 +1169,7 @@ if not st.session_state.optimization_run:
             if location:
                 initial_center = [location.latitude, location.longitude]
                 initial_zoom = 13
+                search_successful = True
                 st.success(f"✅ Found: {location.address}")
             else:
                 st.error("❌ Location not found. Try a different search term.")
@@ -1204,7 +1206,8 @@ if not st.session_state.optimization_run:
             }
         ).add_to(m)
     
-    if bounds:
+    # Only fit to bounds if there are existing features AND no search was performed
+    if bounds and not search_successful:
         min_lon, min_lat, max_lon, max_lat = bounds
         m.fit_bounds(
             [[min_lat, min_lon], [max_lat, max_lon]],
