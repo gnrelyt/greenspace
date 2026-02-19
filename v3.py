@@ -165,29 +165,29 @@ def calculate_area_hectares(coords):
     
     poly = Polygon([(c[0], c[1]) for c in coords])
     
-    # DEBUG: Print the centroid coordinates
-    print(f"DEBUG: Centroid = {poly.centroid.x:.4f}, {poly.centroid.y:.4f}")
+    # DEBUG: Show debug info in the app
+    centroid_x = poly.centroid.x
+    centroid_y = poly.centroid.y
     
     gdf = gpd.GeoDataFrame([1], geometry=[poly], crs="EPSG:4326")
     appropriate_crs = get_appropriate_crs(poly)
     
-    # DEBUG: Print which CRS is being used
-    print(f"DEBUG: Using CRS = {appropriate_crs}")
-    
     gdf_projected = gdf.to_crs(appropriate_crs)
     area_m2 = gdf_projected.geometry[0].area
+    area_ha = area_m2 / 10000
     
-    # DEBUG: Print the raw area
-    print(f"DEBUG: Area in m² = {area_m2:.2f}, Area in ha = {area_m2 / 10000:.2f}")
+    # Store debug info in session state so we can display it
+    if 'debug_info' not in st.session_state:
+        st.session_state.debug_info = []
     
-    return area_m2 / 10000
-    poly = Polygon([(c[0], c[1]) for c in coords])
-    gdf = gpd.GeoDataFrame([1], geometry=[poly], crs="EPSG:4326")
-    appropriate_crs = get_appropriate_crs(poly)
-    gdf_projected = gdf.to_crs(appropriate_crs)
-    area_m2 = gdf_projected.geometry[0].area
+    st.session_state.debug_info.append({
+        'centroid': f"({centroid_x:.4f}, {centroid_y:.4f})",
+        'crs': appropriate_crs,
+        'area_m2': f"{area_m2:.2f}",
+        'area_ha': f"{area_ha:.2f}"
+    })
     
-    return area_m2 / 10000
+    return area_ha
 
 def get_bounds_from_polygons(features):
     """Get the bounding box of all polygons."""
@@ -926,7 +926,17 @@ with st.sidebar:
         
         if total_hectares > 0:
             st.metric("Boundary Area (ha)", f"{total_hectares:.2f}")
-        
+               if total_hectares > 0:
+            st.metric("Boundary Area (ha)", f"{total_hectares:.2f}")
+            
+            # DEBUG INFO - Show calculation details
+            if 'debug_info' in st.session_state and st.session_state.debug_info:
+                with st.expander("🐛 Debug Info (Area Calculation)"):
+                    latest = st.session_state.debug_info[-1]
+                    st.write(f"**Centroid:** {latest['centroid']}")
+                    st.write(f"**CRS Used:** {latest['crs']}")
+                    st.write(f"**Area (m²):** {latest['area_m2']}")
+                    st.write(f"**Area (ha):** {latest['area_ha']}") 
         st.divider()
         
         boundary = load_boundary_polygon(st.session_state.geojson_features)
