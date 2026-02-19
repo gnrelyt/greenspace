@@ -164,6 +164,24 @@ def calculate_area_hectares(coords):
         return 0
     
     poly = Polygon([(c[0], c[1]) for c in coords])
+    
+    # DEBUG: Print the centroid coordinates
+    print(f"DEBUG: Centroid = {poly.centroid.x:.4f}, {poly.centroid.y:.4f}")
+    
+    gdf = gpd.GeoDataFrame([1], geometry=[poly], crs="EPSG:4326")
+    appropriate_crs = get_appropriate_crs(poly)
+    
+    # DEBUG: Print which CRS is being used
+    print(f"DEBUG: Using CRS = {appropriate_crs}")
+    
+    gdf_projected = gdf.to_crs(appropriate_crs)
+    area_m2 = gdf_projected.geometry[0].area
+    
+    # DEBUG: Print the raw area
+    print(f"DEBUG: Area in m² = {area_m2:.2f}, Area in ha = {area_m2 / 10000:.2f}")
+    
+    return area_m2 / 10000
+    poly = Polygon([(c[0], c[1]) for c in coords])
     gdf = gpd.GeoDataFrame([1], geometry=[poly], crs="EPSG:4326")
     appropriate_crs = get_appropriate_crs(poly)
     gdf_projected = gdf.to_crs(appropriate_crs)
