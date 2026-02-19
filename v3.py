@@ -917,7 +917,7 @@ def create_park_buffers(parks, park_size_ha=1.25):
 with st.sidebar:
     st.header("📊 Polygon Information")
     
-       if st.session_state.geojson_features:
+     if st.session_state.geojson_features:
         total_hectares = sum(
             calculate_area_hectares(feature['geometry']['coordinates'][0])
             for feature in st.session_state.geojson_features
