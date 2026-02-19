@@ -1143,8 +1143,14 @@ with st.sidebar:
 if not st.session_state.optimization_run:
     st.subheader("Interactive Map")
     
+    # Initialize search state
+    if 'search_center' not in st.session_state:
+        st.session_state.search_center = None
+    if 'search_zoom' not in st.session_state:
+        st.session_state.search_zoom = None
+    
     # Add search functionality
-    col1, col2 = st.columns([3, 1])
+    col1, col2, col3 = st.columns([3, 1, 1])
     with col1:
         search_query = st.text_input(
             "🔍 Search location (postcode, city, or address)",
@@ -1153,11 +1159,14 @@ if not st.session_state.optimization_run:
         )
     with col2:
         search_button = st.button("Search", use_container_width=True, type="primary")
+    with col3:
+        reset_button = st.button("Reset View", use_container_width=True)
     
-    # Initialize map center and zoom
-    initial_center = [54.5973, -3.4360]
-    initial_zoom = 6
-    search_successful = False
+    # Handle reset
+    if reset_button:
+        st.session_state.search_center = None
+        st.session_state.search_zoom = None
+        st.rerun()
     
     # Handle search
     if search_button and search_query:
@@ -1167,14 +1176,22 @@ if not st.session_state.optimization_run:
             location = geolocator.geocode(search_query, timeout=10)
             
             if location:
-                initial_center = [location.latitude, location.longitude]
-                initial_zoom = 13
-                search_successful = True
+                st.session_state.search_center = [location.latitude, location.longitude]
+                st.session_state.search_zoom = 13
                 st.success(f"✅ Found: {location.address}")
+                st.rerun()
             else:
                 st.error("❌ Location not found. Try a different search term.")
         except Exception as e:
             st.error(f"❌ Search error: {str(e)}")
+    
+    # Determine map center and zoom
+    if st.session_state.search_center is not None:
+        initial_center = st.session_state.search_center
+        initial_zoom = st.session_state.search_zoom
+    else:
+        initial_center = [54.5973, -3.4360]
+        initial_zoom = 6
     
     bounds = get_bounds_from_polygons(st.session_state.geojson_features)
     
@@ -1206,8 +1223,8 @@ if not st.session_state.optimization_run:
             }
         ).add_to(m)
     
-    # Only fit to bounds if there are existing features AND no search was performed
-    if bounds and not search_successful:
+    # Only fit to bounds if there are existing features AND no active search
+    if bounds and st.session_state.search_center is None:
         min_lon, min_lat, max_lon, max_lat = bounds
         m.fit_bounds(
             [[min_lat, min_lon], [max_lat, max_lon]],
@@ -1249,6 +1266,9 @@ if not st.session_state.optimization_run:
                     }
                     st.session_state.geojson_features.append(feature)
                     st.session_state.cached_boundary = None
+                    # Clear search state when a new polygon is drawn
+                    st.session_state.search_center = None
+                    st.session_state.search_zoom = None
                     st.rerun()
 
 else:
