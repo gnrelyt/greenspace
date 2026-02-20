@@ -247,35 +247,46 @@ def load_boundary_polygon(features):
     
     return unary_union(polygons) if polygons else None
 
-def create_park_at_location(centroid, target_area_m2, boundary_poly, lon_per_m, lat_per_m):
+def create_park_at_location(centroid, target_area_m2, boundary_poly, lon_per_m, lat_per_m, min_area_m2=None):
     """Create a park at a given location (square shape)."""
     from shapely.ops import transform
+    from pyproj import Transformer
     
-    to_meters, to_latlon = get_transformers()
+    # Get the appropriate CRS for this location
+    appropriate_crs = get_appropriate_crs(boundary_poly)
+    
+    # Create transformers for the appropriate CRS
+    to_projected = Transformer.from_crs("EPSG:4326", appropriate_crs, always_xy=True)
+    to_latlon = Transformer.from_crs(appropriate_crs, "EPSG:4326", always_xy=True)
+    
     centroid_point = Point(centroid[0], centroid[1])
-    centroid_meters = transform(to_meters.transform, centroid_point)
+    centroid_projected = transform(to_projected.transform, centroid_point)
     
     park_side_m = np.sqrt(target_area_m2)
     half_side = park_side_m / 2
     
-    park_meters = box(
-        centroid_meters.x - half_side,
-        centroid_meters.y - half_side,
-        centroid_meters.x + half_side,
-        centroid_meters.y + half_side
+    park_projected = box(
+        centroid_projected.x - half_side,
+        centroid_projected.y - half_side,
+        centroid_projected.x + half_side,
+        centroid_projected.y + half_side
     )
     
-    park_latlon = transform(to_latlon.transform, park_meters)
+    park_latlon = transform(to_latlon.transform, park_projected)
     
     if not boundary_poly.contains(park_latlon):
         return None
     
+    # Verify the actual area
     gdf = gpd.GeoDataFrame([1], geometry=[park_latlon], crs="EPSG:4326")
-    appropriate_crs = get_appropriate_crs(boundary_poly)
     gdf_projected = gdf.to_crs(appropriate_crs)
     actual_area_m2 = gdf_projected.geometry[0].area
     
-    return park_latlon if actual_area_m2 >= 3000 else None
+    # Use minimum area threshold - default to 30% of target if not specified
+    if min_area_m2 is None:
+        min_area_m2 = target_area_m2 * 0.3
+    
+    return park_latlon if actual_area_m2 >= min_area_m2 else None
 
 # ============================================================================
 # BUILD LIVE MAP FUNCTION
@@ -506,9 +517,11 @@ def find_minimum_parks_optimal(boundary_poly, min_area_ha=0.5, max_area_ha=2.0):
     progress_bar.progress(10)
     
     candidate_parks = []
+    min_area_m2 = target_area_m2 * 0.3  # Accept parks down to 30% of target
+    
     for x in x_coords:
         for y in y_coords:
-            park = create_park_at_location([x, y], target_area_m2, boundary_poly, lon_per_m, lat_per_m)
+            park = create_park_at_location([x, y], target_area_m2, boundary_poly, lon_per_m, lat_per_m, min_area_m2)
             if park is not None:
                 candidate_parks.append(park)
     
@@ -636,6 +649,7 @@ def refine_park_positions_full(parks, boundary_poly, service_distance_m,
     
     ref_lat = boundary_poly.centroid.y
     service_distance_deg = meters_to_degrees(service_distance_m, ref_lat)
+    min_area_m2 = target_area_m2 * 0.3  # Minimum acceptable park area
     
     # Dynamic iteration count based on refinement intensity and boundary area (in hectares)
     boundary_area_ha = boundary_area_m2 / 10000
@@ -691,7 +705,7 @@ def refine_park_positions_full(parks, boundary_poly, service_distance_m,
                         test_x = mid_x + radius * np.cos(angle)
                         test_y = mid_y + radius * np.sin(angle)
                         
-                        test_park = create_park_at_location([test_x, test_y], target_area_m2, boundary_poly, lon_per_m, lat_per_m)
+                        test_park = create_park_at_location([test_x, test_y], target_area_m2, boundary_poly, lon_per_m, lat_per_m, min_area_m2)
                         if test_park is None:
                             continue
                         
@@ -748,7 +762,7 @@ def refine_park_positions_full(parks, boundary_poly, service_distance_m,
                         test_x = current_x + radius * np.cos(angle)
                         test_y = current_y + radius * np.sin(angle)
                         
-                        test_park = create_park_at_location([test_x, test_y], target_area_m2, boundary_poly, lon_per_m, lat_per_m)
+                        test_park = create_park_at_location([test_x, test_y], target_area_m2, boundary_poly, lon_per_m, lat_per_m, min_area_m2)
                         if test_park is None:
                             continue
                         
@@ -813,7 +827,7 @@ def refine_park_positions_full(parks, boundary_poly, service_distance_m,
                         test_x = current_x + radius * np.cos(angle)
                         test_y = current_y + radius * np.sin(angle)
                         
-                        test_park = create_park_at_location([test_x, test_y], target_area_m2, boundary_poly, lon_per_m, lat_per_m)
+                        test_park = create_park_at_location([test_x, test_y], target_area_m2, boundary_poly, lon_per_m, lat_per_m, min_area_m2)
                         if test_park is None:
                             continue
                         
